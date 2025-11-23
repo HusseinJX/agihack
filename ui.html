@@ -3,12 +3,42 @@
 <head>
   <title>Vendor Agent Demo</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 20px; }
-    input { width: 400px; padding: 5px; }
-    button { padding: 5px 10px; margin-left: 10px; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; margin: 0; padding: 20px; background: #f5f7fa; }
+    input { width: 400px; padding: 10px; border: 2px solid #e1e8ed; border-radius: 8px; font-size: 14px; }
+    button { padding: 5px 10px; margin-left: 10px; border-radius: 6px; cursor: pointer; }
     .vendor, .products, .logs { margin-top: 20px; }
     .product { border: 1px solid #ddd; padding: 10px; margin-bottom: 10px; }
     pre { background: #f4f4f4; padding: 10px; overflow-x: auto; }
+    
+    /* Pretty View Styles */
+    .pretty-container { display: none; max-width: 1200px; margin: 30px auto; background: white; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); overflow: hidden; }
+    .pretty-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px; color: white; display: flex; align-items: center; gap: 30px; }
+    .pretty-logo { width: 120px; height: 120px; border-radius: 16px; background: white; padding: 10px; object-fit: contain; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+    .pretty-header-info h1 { margin: 0 0 10px 0; font-size: 36px; font-weight: 700; }
+    .pretty-header-info .location { font-size: 16px; opacity: 0.9; display: flex; align-items: center; gap: 8px; }
+    .pretty-content { padding: 40px; }
+    .pretty-section { margin-bottom: 40px; }
+    .pretty-section h2 { color: #2d3748; font-size: 24px; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid #e2e8f0; }
+    .pretty-description { color: #4a5568; line-height: 1.8; font-size: 16px; }
+    .pretty-contact { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; }
+    .pretty-contact-item { background: #f7fafc; padding: 20px; border-radius: 12px; border-left: 4px solid #667eea; }
+    .pretty-contact-item strong { color: #2d3748; display: block; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .pretty-contact-item span { color: #4a5568; font-size: 15px; }
+    .pretty-social { display: flex; gap: 15px; flex-wrap: wrap; }
+    .pretty-social a { color: #667eea; text-decoration: none; padding: 8px 16px; background: #edf2f7; border-radius: 8px; transition: all 0.3s; }
+    .pretty-social a:hover { background: #667eea; color: white; }
+    .pretty-products { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 24px; }
+    .pretty-product-card { background: white; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; transition: all 0.3s; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+    .pretty-product-card:hover { transform: translateY(-4px); box-shadow: 0 8px 24px rgba(0,0,0,0.12); }
+    .pretty-product-image { width: 100%; height: 200px; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); object-fit: cover; }
+    .pretty-product-info { padding: 20px; }
+    .pretty-product-name { font-size: 18px; font-weight: 600; color: #2d3748; margin-bottom: 8px; }
+    .pretty-product-category { display: inline-block; background: #edf2f7; color: #667eea; padding: 4px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; margin-bottom: 10px; }
+    .pretty-product-price { font-size: 20px; font-weight: 700; color: #667eea; margin: 10px 0; }
+    .pretty-product-desc { color: #718096; font-size: 14px; line-height: 1.6; margin-top: 10px; }
+    .view-toggle { text-align: center; margin: 20px 0; }
+    .view-toggle button { background: #e2e8f0; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; margin: 0 5px; }
+    .view-toggle button.active { background: #667eea; color: white; }
   </style>
 </head>
 <body>
@@ -17,6 +47,7 @@
   <div>
     <input type="text" id="vendorUrl" placeholder="Enter vendor URL">
     <button onclick="runAgent()">Run Agent</button>
+    <button onclick="showPrettyView()" id="prettyBtn" style="display: none; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-weight: 600;">View Pretty Profile</button>
   </div>
 
   <div class="vendor">
@@ -38,6 +69,54 @@
   <div class="logs">
     <h2>Logs / State</h2>
     <pre id="logsOutput"></pre>
+  </div>
+
+  <div class="view-toggle" id="viewToggle" style="display: none;">
+    <button onclick="showDefaultView()" class="active" id="defaultViewBtn">Default View</button>
+    <button onclick="showPrettyView()" id="prettyViewBtn">Pretty View</button>
+  </div>
+
+  <!-- Pretty View Container -->
+  <div class="pretty-container" id="prettyContainer">
+    <div class="pretty-header">
+      <img id="prettyLogo" class="pretty-logo" src="" alt="Logo" onerror="this.style.display='none'">
+      <div class="pretty-header-info">
+        <h1 id="prettyName">Vendor Name</h1>
+        <div class="location">
+          <span>📍</span>
+          <span id="prettyLocation">Location</span>
+        </div>
+      </div>
+    </div>
+    <div class="pretty-content">
+      <div class="pretty-section">
+        <h2>About</h2>
+        <p class="pretty-description" id="prettyDescription">Description will appear here</p>
+      </div>
+      
+      <div class="pretty-section">
+        <h2>Contact Information</h2>
+        <div class="pretty-contact">
+          <div class="pretty-contact-item" id="prettyEmails">
+            <strong>Email</strong>
+            <span>No emails available</span>
+          </div>
+          <div class="pretty-contact-item" id="prettyPhones">
+            <strong>Phone</strong>
+            <span>No phones available</span>
+          </div>
+        </div>
+        <div style="margin-top: 20px;">
+          <strong style="color: #2d3748; display: block; margin-bottom: 10px;">Social Links</strong>
+          <div class="pretty-social" id="prettySocial"></div>
+        </div>
+      </div>
+      
+      <div class="pretty-section">
+        <h2>Products</h2>
+        <div class="pretty-products" id="prettyProducts"></div>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -93,8 +172,101 @@
         // Logs
         document.getElementById('logsOutput').textContent = JSON.stringify(data.state, null, 2);
 
+        // Show pretty button and view toggle
+        document.getElementById('prettyBtn').style.display = 'inline-block';
+        document.getElementById('viewToggle').style.display = 'block';
+        
+        // Store data for pretty view
+        window.vendorData = data;
+
       } catch (err) {
         document.getElementById('logsOutput').textContent = 'Error: ' + err;
+      }
+    }
+
+    function showDefaultView() {
+      document.querySelector('.vendor').style.display = 'block';
+      document.querySelector('.products').style.display = 'block';
+      document.querySelector('.logs').style.display = 'block';
+      document.getElementById('prettyContainer').style.display = 'none';
+      document.getElementById('defaultViewBtn').classList.add('active');
+      document.getElementById('prettyViewBtn').classList.remove('active');
+    }
+
+    function showPrettyView() {
+      if (!window.vendorData) {
+        alert("Please run the agent first to load data");
+        return;
+      }
+
+      const data = window.vendorData;
+      const v = data.vendor;
+
+      // Hide default view, show pretty view
+      document.querySelector('.vendor').style.display = 'none';
+      document.querySelector('.products').style.display = 'none';
+      document.querySelector('.logs').style.display = 'none';
+      document.getElementById('prettyContainer').style.display = 'block';
+      document.getElementById('prettyViewBtn').classList.add('active');
+      document.getElementById('defaultViewBtn').classList.remove('active');
+
+      // Populate pretty view
+      document.getElementById('prettyName').textContent = v.name || 'Unknown Vendor';
+      document.getElementById('prettyLocation').textContent = v.location || 'Location not specified';
+      
+      // Logo
+      const logoImg = document.getElementById('prettyLogo');
+      if (v.logo) {
+        logoImg.src = v.logo;
+        logoImg.style.display = 'block';
+      } else {
+        logoImg.style.display = 'none';
+      }
+
+      // Description
+      document.getElementById('prettyDescription').textContent = v.description || 'No description available.';
+
+      // Contact info
+      const emailsDiv = document.getElementById('prettyEmails');
+      if (v.contact.emails && v.contact.emails.length > 0) {
+        emailsDiv.innerHTML = `<strong>Email</strong><span>${v.contact.emails.map(e => `<a href="mailto:${e}" style="color: #667eea; text-decoration: none;">${e}</a>`).join('<br>')}</span>`;
+      } else {
+        emailsDiv.innerHTML = '<strong>Email</strong><span style="color: #a0aec0;">No emails available</span>';
+      }
+
+      const phonesDiv = document.getElementById('prettyPhones');
+      if (v.contact.phones && v.contact.phones.length > 0) {
+        phonesDiv.innerHTML = `<strong>Phone</strong><span>${v.contact.phones.join('<br>')}</span>`;
+      } else {
+        phonesDiv.innerHTML = '<strong>Phone</strong><span style="color: #a0aec0;">No phones available</span>';
+      }
+
+      // Social links
+      const socialDiv = document.getElementById('prettySocial');
+      if (v.social_links && v.social_links.length > 0) {
+        socialDiv.innerHTML = v.social_links.map(link => 
+          `<a href="${link}" target="_blank">${link}</a>`
+        ).join('');
+      } else {
+        socialDiv.innerHTML = '<span style="color: #a0aec0;">No social links available</span>';
+      }
+
+      // Products
+      const productsDiv = document.getElementById('prettyProducts');
+      if (data.products && data.products.length > 0) {
+        productsDiv.innerHTML = data.products.map(p => `
+          <div class="pretty-product-card">
+            ${p.image ? `<img src="${p.image}" class="pretty-product-image" alt="${p.name}" onerror="this.style.display='none'">` : ''}
+            <div class="pretty-product-info">
+              <div class="pretty-product-name">${p.name || 'Unnamed Product'}</div>
+              ${p.category ? `<span class="pretty-product-category">${p.category}</span>` : ''}
+              ${p.price ? `<div class="pretty-product-price">${p.price}</div>` : ''}
+              ${p.description ? `<div class="pretty-product-desc">${p.description}</div>` : ''}
+            </div>
+          </div>
+        `).join('');
+      } else {
+        productsDiv.innerHTML = '<p style="color: #a0aec0; text-align: center; padding: 40px;">No products found</p>';
       }
     }
   </script>
