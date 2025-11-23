@@ -1,140 +1,165 @@
-# vendor_agent_flask.py
+from flask import Flask, request, jsonify
 import requests
-from bs4 import BeautifulSoup
 import time
 import json
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-
-MAX_RETRIES = 3
-WAIT_BETWEEN_RETRIES = 1  # seconds
 
 app = Flask(__name__)
-CORS(app)
 
-# Initialize state
-state = {
-    "logs": [],
-    "retries": {},
-    "fallbacks_used": []
-}
+# --- AGI API Config ---
+BASE_URL = "https://api.agi.tech/v1"
+AGI_API_KEY = "49e851f1-8f2b-4565-9995-136ec665691a"
 
-# ---------- Helper Functions ----------
-def retry_action(step_name, action_fn, verify_fn, fallback):
-    """Generic retry/verify/fallback wrapper"""
-    for attempt in range(1, MAX_RETRIES + 1):
+# --- Retry utility ---
+def retry_request(func, retries=3, delay=5):
+    for attempt in range(1, retries + 1):
         try:
-            result = action_fn()
-            if verify_fn(result):
-                state["logs"].append(f"{step_name} succeeded on attempt {attempt}")
-                state["retries"][step_name] = attempt - 1
-                return result
-            else:
-                state["logs"].append(f"{step_name} verification failed on attempt {attempt}")
+            result = func()
+            return result, {"success": True, "attempts": attempt}
         except Exception as e:
-            state["logs"].append(f"{step_name} error on attempt {attempt}: {e}")
-        time.sleep(WAIT_BETWEEN_RETRIES)
+            print(f"Attempt {attempt} failed: {e}")
+            if attempt == retries:
+                return None, {"success": False, "error": str(e), "attempts": attempt}
+            time.sleep(delay)
 
-    state["logs"].append(f"{step_name} failed, using fallback")
-    state["fallbacks_used"].append(step_name)
-    return fallback
-
-def dom_first(soup, selectors, default=""):
-    """Try a list of selectors, return first non-empty"""
-    for sel in selectors:
-        el = soup.select_one(sel)
-        if el and el.get_text(strip=True):
-            return el.get_text(strip=True)
-    return default
-
-# ---------- 10-Step Agent Workflow ----------
-def run_vendor_onboarding(vendor_url):
-    vendor_data = {
-        "name": "",
-        "logo": "",
-        "description": "",
-        "contact": {"emails": [], "phones": []},
-        "location": "",
-        "social_links": []
+# --- Core agent function ---
+def run_vendor_agent(vendor_url):
+    state_log = []
+    result = {
+        "name_from_response": None,
+        "name_from_instructions": None,
+        "description_from_response": None,
+        "description_from_instructions": None,
+        "state_log": state_log
     }
-    products_data = []
 
-    # Step 0: Open page
-    def step0():
-        r = requests.get(vendor_url, timeout=5)
-        return BeautifulSoup(r.text, "lxml")
-    soup = retry_action("Open Vendor Page", step0, lambda x: x is not None, None)
-    if soup is None:
-        return {"vendor": vendor_data, "products": products_data, "state": state}
+    # --- Step 1: Create session ---
+    def create_session():
+        print("Creating AGI session...")
+        resp = requests.post(
+            f"{BASE_URL}/sessions",
+            headers={"Authorization": f"Bearer {AGI_API_KEY}"},
+            json={"agent_name": "agi-0"},
+            timeout=60
+        )
+        resp.raise_for_status()
+        session_data = resp.json()
+        return session_data.get("session_id"), session_data
 
-    # Step 1: Extract Vendor Name
-    def step1():
-        return dom_first(soup, ["title", "h1", "meta[name='title']"], default=vendor_url)
-    vendor_data["name"] = retry_action("Extract Vendor Name", step1, lambda x: len(x) > 0, vendor_url)
+    session_result, state = retry_request(create_session)
+    state_log.append({"step": "Create Session", **state})
+    if not state["success"]:
+        return result
+    
+    session_id = session_result[0] if session_result else None
+    session_data = session_result[1] if session_result else {}
+    
+    # Extract name and description from session creation response
+    result["name_from_response"] = session_data.get("name", None)
+    result["description_from_response"] = session_data.get("description", None)
+    print(f"Name from response: {result['name_from_response']}")
+    print(f"Description from response: {result['description_from_response']}")
 
-    # Step 2: Extract Logo
-    def step2():
-        return dom_first(soup, ["img[alt*='logo']", "img[class*='logo']"], default="")
-    vendor_data["logo"] = retry_action("Extract Vendor Logo", step2, lambda x: x != "", "")
+    # --- Step 2: Send instructions ---
+    def send_task():
+        message = f"""
+            Go to the business/vendor page: {vendor_url}
+            Extract the following information:
+            - Business name
+            - Business description
+            Return as JSON with "name" and "description" keys.
+        """
+        print("Sending instructions to AGI agent...")
+        resp = requests.post(
+            f"{BASE_URL}/sessions/{session_id}/message",
+            headers={"Authorization": f"Bearer {AGI_API_KEY}"},
+            json={"message": message},
+            timeout=60
+        )
+        resp.raise_for_status()
+        return True
 
-    # Step 3: Extract Description
-    def step3():
-        return dom_first(soup, ["meta[name='description']", "p"], default="")
-    vendor_data["description"] = retry_action("Extract Description", step3, lambda x: len(x) > 0, "")
+    _, state = retry_request(send_task)
+    state_log.append({"step": "Send Instructions", **state})
+    if not state["success"]:
+        return result
 
-    # Step 4: Extract Contact Info (simplified)
-    def step4():
-        emails = [a.get('href').replace("mailto:", "") for a in soup.select("a[href^=mailto]")]
-        phones = []  # Add regex scanning if needed
-        return {"emails": emails, "phones": phones}
-    vendor_data["contact"] = retry_action("Extract Contact Info", step4, lambda x: True, {"emails": [], "phones": []})
+    # --- Step 3: Monitor progress ---
+    finished = False
+    attempt = 0
+    while not finished and attempt < 30:
+        attempt += 1
+        def get_status():
+            resp = requests.get(
+                f"{BASE_URL}/sessions/{session_id}/status",
+                headers={"Authorization": f"Bearer {AGI_API_KEY}"},
+                timeout=30
+            )
+            resp.raise_for_status()
+            return resp.json()
 
-    # Step 5: Extract Location
-    def step5():
-        return dom_first(soup, ["address", "footer"], default="Unknown")
-    vendor_data["location"] = retry_action("Extract Location", step5, lambda x: len(x) > 0, "Unknown")
+        status, _ = retry_request(get_status)
+        print(f"Checking agent status... attempt {attempt}")
+        if status and status.get("status") in ["finished", "error"]:
+            finished = True
+        else:
+            time.sleep(2)
 
-    # Step 6: Extract Social Links
-    def step6():
-        links = [a['href'] for a in soup.select("a[href*='facebook'], a[href*='instagram'], a[href*='twitter']")]
-        return links
-    vendor_data["social_links"] = retry_action("Extract Social Links", step6, lambda x: isinstance(x, list), [])
+    # --- Step 4: Get results ---
+    def get_results():
+        resp = requests.get(
+            f"{BASE_URL}/sessions/{session_id}/messages",
+            headers={"Authorization": f"Bearer {AGI_API_KEY}"},
+            timeout=30
+        )
+        resp.raise_for_status()
+        messages = resp.json().get("messages", [])
+        for msg in messages:
+            if msg.get("type") == "DONE":
+                content = msg.get("content", "")
+                # Try to parse as JSON if it's a string
+                try:
+                    if isinstance(content, str):
+                        content = json.loads(content)
+                    return content
+                except (json.JSONDecodeError, TypeError):
+                    # If not JSON, return as is (might be plain text)
+                    return {"name": content if content else None, "description": None}
+        return {}
 
-    # Step 7: Extract Products (simplified, placeholder)
-    def step7():
-        product_divs = soup.select("div[class*='product'], li[class*='item']")
-        products = []
-        for div in product_divs:
-            name = div.select_one("h2,h3,h4")
-            name_text = name.get_text(strip=True) if name else "Unnamed Product"
-            products.append({"name": name_text, "image": "", "price": "", "description": "", "category": ""})
-        return products
-    products_data = retry_action("Extract Products", step7, lambda x: isinstance(x, list), [])
+    data, state = retry_request(get_results)
+    state_log.append({"step": "Get Results", **state})
+    if data:
+        # Extract name and description from instructions response
+        result["name_from_instructions"] = data.get("name", None)
+        result["description_from_instructions"] = data.get("description", None)
+        print(f"Name from instructions: {result['name_from_instructions']}")
+        print(f"Description from instructions: {result['description_from_instructions']}")
 
-    # Step 8: Infer Categories
-    def step8():
-        for p in products_data:
-            if not p.get("category"):
-                p["category"] = "Uncategorized"
-        return products_data
-    products_data = retry_action("Infer Categories", step8, lambda x: True, products_data)
+    # --- Step 5: Cleanup session ---
+    def cleanup():
+        resp = requests.delete(
+            f"{BASE_URL}/sessions/{session_id}",
+            headers={"Authorization": f"Bearer {AGI_API_KEY}"},
+            timeout=30
+        )
+        resp.raise_for_status()
+        return True
 
-    # Step 9: Assemble JSON
-    def step9():
-        return {"vendor": vendor_data, "products": products_data, "state": state}
-    final_output = retry_action("Assemble JSON", step9, lambda x: True, {"vendor": vendor_data, "products": products_data, "state": state})
+    _, state = retry_request(cleanup)
+    state_log.append({"step": "Cleanup Session", **state})
 
-    return final_output
+    return result
 
-# ---------- Flask Endpoint ----------
+# --- Flask route ---
 @app.route("/run-agent", methods=["POST"])
-def run_agent_endpoint():
-    vendor_url = request.json.get("url")
+def run_agent():
+    data = request.get_json()
+    vendor_url = data.get("vendor_url")
     if not vendor_url:
-        return jsonify({"error": "No URL provided"}), 400
-    result = run_vendor_onboarding(vendor_url)
+        return jsonify({"error": "Missing vendor_url"}), 400
+
+    result = run_vendor_agent(vendor_url)
     return jsonify(result)
 
-# ---------- Run Flask ----------
 if __name__ == "__main__":
-    app.run(port=5000, debug=True)
+    app.run(debug=True)
