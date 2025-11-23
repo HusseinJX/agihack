@@ -142,35 +142,44 @@
         const response = await fetch('http://127.0.0.1:5000/run-agent', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url })
+          body: JSON.stringify({ vendor_url: url })
         });
+        
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+          throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
+        
         const data = await response.json();
 
         // Vendor Info
-        const v = data.vendor;
-        document.getElementById('vendorName').textContent = v.name;
-        document.getElementById('vendorLogo').textContent = v.logo;
-        document.getElementById('vendorDesc').textContent = v.description;
-        document.getElementById('vendorLocation').textContent = v.location;
-        document.getElementById('vendorEmails').textContent = v.contact.emails.join(", ");
-        document.getElementById('vendorPhones').textContent = v.contact.phones.join(", ");
-        document.getElementById('vendorSocial').textContent = v.social_links.join(", ");
+        const v = data.vendor || {};
+        document.getElementById('vendorName').textContent = v.name || '';
+        document.getElementById('vendorLogo').textContent = v.logo || '';
+        document.getElementById('vendorDesc').textContent = v.description || '';
+        document.getElementById('vendorLocation').textContent = v.location || '';
+        document.getElementById('vendorEmails').textContent = (v.contact && v.contact.emails) ? v.contact.emails.join(", ") : '';
+        document.getElementById('vendorPhones').textContent = (v.contact && v.contact.phones) ? v.contact.phones.join(", ") : '';
+        document.getElementById('vendorSocial').textContent = v.social_links ? v.social_links.join(", ") : '';
 
         // Products
         const productsContainer = document.getElementById('productsContainer');
-        data.products.forEach(p => {
-          const div = document.createElement('div');
-          div.className = 'product';
-          div.innerHTML = `<strong>${p.name}</strong><br>
-                           Category: ${p.category}<br>
-                           Price: ${p.price}<br>
-                           Description: ${p.description}<br>
-                           Image: ${p.image}`;
-          productsContainer.appendChild(div);
-        });
+        productsContainer.innerHTML = '';
+        if (data.products && Array.isArray(data.products)) {
+          data.products.forEach(p => {
+            const div = document.createElement('div');
+            div.className = 'product';
+            div.innerHTML = `<strong>${p.name || 'Unnamed'}</strong><br>
+                             Category: ${p.category || 'N/A'}<br>
+                             Price: ${p.price || 'N/A'}<br>
+                             Description: ${p.description || 'N/A'}<br>
+                             Image: ${p.image || 'N/A'}`;
+            productsContainer.appendChild(div);
+          });
+        }
 
         // Logs
-        document.getElementById('logsOutput').textContent = JSON.stringify(data.state, null, 2);
+        document.getElementById('logsOutput').textContent = JSON.stringify(data.state_log || data, null, 2);
 
         // Show pretty button and view toggle
         document.getElementById('prettyBtn').style.display = 'inline-block';

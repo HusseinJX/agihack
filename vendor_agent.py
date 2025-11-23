@@ -1,19 +1,144 @@
-from flask import Flask, request, jsonify
+"""
+Simple Flask + AGI-orchestrator example: Fly-Out Assistant
+
+This is a single-file Python app that demonstrates how to orchestrate a "fly someone out" workflow.
+It provides a minimal web UI for input and then runs a linear workflow:
+ 1. Buy flight at https://real-flyunified.vercel.app/
+ 2. Order Uber at https://real-udriver.vercel.app/ timed shortly after landing
+ 3. Book dining (OpenDining) OR order food (DoorDash clone) at provided URLs
+ 4. Book lodging (Airbnb or Marriott clone)
+ 5. Add events to a calendar at https://real-gocalendar.vercel.app/calendar
+
+Important notes:
+ - The remote services used here are placeholders. Adjust request bodies / auth to match each service's API.
+ - This app DOES NOT perform real payments. Treat the HTTP calls as examples.
+ - Configure environment variables for secrets (AGI API key, any provider credentials) before running.
+
+How to run:
+ 1. python3 -m venv venv
+ 2. source venv/bin/activate
+ 3. pip install flask requests python-dotenv
+ 4. export AGI_API_KEY="your_agi_api_key"  # or use a .env file
+ 5. python flyout_app.py
+ 6. Open http://127.0.0.1:5000
+
+"""
+
+from flask import Flask, request, render_template_string, jsonify
+import os
 import requests
+import datetime
 import time
 import json
-from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse
-import re
+from urllib.parse import urljoin
 
 app = Flask(__name__)
 
-# --- AGI API Config ---
-BASE_URL = "https://api.agi.tech/v1"
-AGI_API_KEY = "49e851f1-8f2b-4565-9995-136ec665691a"
+# Configuration (use environment variables in production)
+AGI_API_KEY = os.getenv("AGI_API_KEY", "49e851f1-8f2b-4565-9995-136ec665691a")
+AGI_BASE_URL = os.getenv("AGI_BASE_URL", "https://api.agi.tech/v1")
 
-# --- Retry utility ---
+
+# Remote service endpoints (provided by the user). These are used as example POST targets.
+ENDPOINTS = {
+    "flight": "https://real-flyunified.vercel.app/api/book",        # example
+    "uber": "https://real-udriver.vercel.app/api/order",
+    "opendining": "https://real-opendining.vercel.app/api/book",
+    "doordash": "https://real-dashdish.vercel.app/api/order",
+    "airbnb": "https://real-staynb.vercel.app/api/book",
+    "marriott": "https://real-marrisuite.vercel.app/api/book",
+    "calendar": "https://real-gocalendar.vercel.app/calendar/api/events",
+}
+
+# Basic HTML UI using render_template_string to keep everything in one file
+INDEX_HTML = """
+<!doctype html>
+<title>Fly-Out Assistant</title>
+<h2>Fly someone out — quick workflow</h2>
+<form method=post action="/start">
+  <label>From (city or airport code): <input name=from_location required></label><br>
+  <label>To (city or airport code): <input name=to_location required></label><br>
+  <label>Depart date (YYYY-MM-DD): <input name=depart_date required></label><br>
+  <label>Return date (optional YYYY-MM-DD): <input name=return_date></label><br>
+  <label>Eating preference: 
+    <select name=eat_mode>
+      <option value="in">Eat in (order food)</option>
+      <option value="out">Eat out (book restaurant)</option>
+    </select>
+  </label><br>
+  <label>Lodging preference:
+    <select name=lodging>
+      <option value="airbnb">Airbnb</option>
+      <option value="marriott">Marriott</option>
+    </select>
+  </label><br>
+  <label>Number of travelers: <input name=num_travelers type=number min=1 value=1></label><br>
+  <button type=submit>Start Fly-Out Workflow</button>
+</form>
+
+<p>Note: This is a demo. Remote endpoints are example placeholders — adapt to your real APIs.</p>
+"""
+
+@app.route('/')
+def index():
+    return render_template_string(INDEX_HTML)
+
+
+@app.route('/start', methods=['POST'])
+def start_workflow():
+    print("\n=== Starting Fly-Out Workflow ===")
+    data = request.form.to_dict()
+    print(f"Received data: {data}")
+    
+    # parse and validate inputs
+    try:
+        depart_date = datetime.datetime.strptime(data.get('depart_date'), '%Y-%m-%d').date()
+    except Exception as e:
+        error_msg = f"Invalid depart_date. Use YYYY-MM-DD. ({e})"
+        print(f"ERROR: {error_msg}")
+        return error_msg, 400
+
+    return_date = None
+    if data.get('return_date'):
+        try:
+            return_date = datetime.datetime.strptime(data.get('return_date'), '%Y-%m-%d').date()
+        except Exception as e:
+            error_msg = f"Invalid return_date. Use YYYY-MM-DD. ({e})"
+            print(f"ERROR: {error_msg}")
+            return error_msg, 400
+
+    workflow_payload = {
+        'from': data.get('from_location'),
+        'to': data.get('to_location'),
+        'depart_date': str(depart_date),
+        'return_date': str(return_date) if return_date else None,
+        'eat_mode': data.get('eat_mode'),
+        'lodging': data.get('lodging'),
+        'num_travelers': int(data.get('num_travelers', 1)),
+    }
+    
+    print(f"Workflow payload: {workflow_payload}")
+
+    # Run the orchestration synchronously and return results as JSON.
+    # NOTE: for production, make these tasks asynchronous and add retries, idempotency keys, and secure payment handling.
+    try:
+        result = run_flyout_workflow(workflow_payload)
+        print(f"Workflow completed. Result: {result}")
+        return jsonify(result)
+    except Exception as e:
+        error_msg = f"Workflow failed with exception: {str(e)}"
+        print(f"EXCEPTION: {error_msg}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': error_msg, 'traceback': traceback.format_exc()}), 500
+
+
+# ------------------------
+# AGI Helper Functions
+# ------------------------
+
 def retry_request(func, retries=3, delay=5):
+    """Retry a function call with exponential backoff"""
     for attempt in range(1, retries + 1):
         try:
             result = func()
@@ -23,462 +148,674 @@ def retry_request(func, retries=3, delay=5):
             if attempt == retries:
                 return None, {"success": False, "error": str(e), "attempts": attempt}
             time.sleep(delay)
+    return None, {"success": False, "error": "Max retries exceeded"}
 
-# --- Regular scraping functions (no AGI API) ---
-def scrape_basic_info(url):
-    """Scrape name, description, and contact info from main page using regular HTTP requests"""
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        resp = requests.get(url, headers=headers, timeout=15)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        
-        result = {
-            "name": None,
-            "description": None,
-            "email": None,
-            "phone": None,
-            "social_media": []
-        }
-        
-        # Extract name
-        name_selectors = [
-            ('h1', lambda x: x.get_text(strip=True)),
-            ('title', lambda x: x.get_text(strip=True)),
-            ('meta[property="og:title"]', lambda x: x.get('content')),
-        ]
-        for selector, extractor in name_selectors:
-            elem = soup.select_one(selector)
-            if elem:
-                name = extractor(elem)
-                if name and len(name) > 2:
-                    result["name"] = name
-                    break
-        
-        # Extract description
-        desc_selectors = [
-            ('meta[name="description"]', lambda x: x.get('content')),
-            ('meta[property="og:description"]', lambda x: x.get('content')),
-        ]
-        for selector, extractor in desc_selectors:
-            elem = soup.select_one(selector)
-            if elem:
-                desc = extractor(elem)
-                if desc and len(desc) > 20:
-                    result["description"] = desc[:500]
-                    break
-        
-        # Extract email from mailto links
-        mailto_links = soup.select('a[href^="mailto:"]')
-        if mailto_links:
-            email = mailto_links[0].get('href', '').replace('mailto:', '').split('?')[0].strip()
-            if email and '@' in email and '.' in email:
-                result["email"] = email
-        
-        # Extract email from text content (regex pattern)
-        if not result["email"]:
-            email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-            page_text = soup.get_text()
-            emails = re.findall(email_pattern, page_text)
-            if emails:
-                # Filter out common false positives
-                valid_emails = [e for e in emails if not any(x in e.lower() for x in ['example.com', 'test.com', 'domain.com', 'email.com'])]
-                if valid_emails:
-                    result["email"] = valid_emails[0]
-        
-        # Extract phone from tel links
-        tel_links = soup.select('a[href^="tel:"]')
-        if tel_links:
-            phone = tel_links[0].get('href', '').replace('tel:', '').strip()
-            if phone:
-                result["phone"] = phone
-        
-        # Extract phone from text content (regex patterns)
-        if not result["phone"]:
-            phone_patterns = [
-                r'\+?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}',  # US format
-                r'\+?\d{1,3}[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}',  # International
-            ]
-            page_text = soup.get_text()
-            for pattern in phone_patterns:
-                phones = re.findall(pattern, page_text)
-                if phones:
-                    # Clean up the phone number
-                    phone = re.sub(r'[^\d+]', '', phones[0])
-                    if len(phone) >= 10:  # Valid phone should have at least 10 digits
-                        result["phone"] = phone
-                        break
-        
-        # Extract social media links from footer and all links
-        social_patterns = ['facebook.com', 'instagram.com', 'twitter.com', 'x.com', 'linkedin.com', 
-                          'tiktok.com', 'youtube.com', 'pinterest.com']
-        social_urls = set()
-        
-        # Check footer first (most common location)
-        footer = soup.select_one('footer')
-        if footer:
-            for link in footer.select('a[href]'):
-                href = link.get('href', '').lower()
-                for platform in social_patterns:
-                    if platform in href:
-                        full_url = urljoin(url, link.get('href'))
-                        social_urls.add(full_url)
-        
-        # Also check all links for social media
-        for link in soup.select('a[href]'):
-            href = link.get('href', '').lower()
-            for platform in social_patterns:
-                if platform in href:
-                    full_url = urljoin(url, link.get('href'))
-                    social_urls.add(full_url)
-        
-        result["social_media"] = list(social_urls)
-        return result
-    except Exception as e:
-        print(f"Scraping error: {e}")
-        return {"name": None, "description": None, "email": None, "phone": None, "social_media": []}
-
-def find_contact_page_url(base_url):
-    """Find contact/support page URL by trying common Shopify paths and scraping footer"""
-    base = urlparse(base_url)
-    base_url_clean = f"{base.scheme}://{base.netloc}"
-    
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-    
-    # First, try to find contact links in footer
-    try:
-        resp = requests.get(base_url, headers=headers, timeout=10)
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            footer = soup.select_one('footer')
-            if footer:
-                contact_keywords = ['contact', 'support', 'help', 'reach', 'get-in-touch', 'customer-service']
-                for link in footer.select('a[href]'):
-                    href = link.get('href', '').lower()
-                    text = link.get_text(strip=True).lower()
-                    if any(keyword in text or keyword in href for keyword in contact_keywords):
-                        full_url = urljoin(base_url, link.get('href'))
-                        # Verify the URL exists
-                        try:
-                            test_resp = requests.head(full_url, headers=headers, timeout=5, allow_redirects=True)
-                            if test_resp.status_code == 200:
-                                return full_url
-                        except:
-                            continue
-    except:
-        pass
-    
-    # Fallback to common paths
-    common_paths = [
-        '/pages/contact', '/contact', '/pages/support', '/support', 
-        '/pages/help', '/help', '/pages/contact-us', '/contact-us'
-    ]
-    
-    for path in common_paths:
-        try:
-            test_url = base_url_clean + path
-            resp = requests.head(test_url, headers=headers, timeout=5, allow_redirects=True)
-            if resp.status_code == 200:
-                return test_url
-        except:
-            continue
-    return None
-
-def scrape_contact_page(url):
-    """Scrape contact page for additional contact info"""
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        resp = requests.get(url, headers=headers, timeout=15)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        
-        result = {"email": None, "phone": None, "social_media": []}
-        
-        # Extract email
-        mailto_links = soup.select('a[href^="mailto:"]')
-        if mailto_links:
-            email = mailto_links[0].get('href', '').replace('mailto:', '').split('?')[0].strip()
-            if email and '@' in email and '.' in email:
-                result["email"] = email
-        
-        if not result["email"]:
-            email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-            page_text = soup.get_text()
-            emails = re.findall(email_pattern, page_text)
-            if emails:
-                valid_emails = [e for e in emails if not any(x in e.lower() for x in ['example.com', 'test.com', 'domain.com', 'email.com'])]
-                if valid_emails:
-                    result["email"] = valid_emails[0]
-        
-        # Extract phone
-        tel_links = soup.select('a[href^="tel:"]')
-        if tel_links:
-            phone = tel_links[0].get('href', '').replace('tel:', '').strip()
-            if phone:
-                result["phone"] = phone
-        
-        if not result["phone"]:
-            phone_patterns = [
-                r'\+?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}',
-                r'\+?\d{1,3}[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}',
-            ]
-            page_text = soup.get_text()
-            for pattern in phone_patterns:
-                phones = re.findall(pattern, page_text)
-                if phones:
-                    phone = re.sub(r'[^\d+]', '', phones[0])
-                    if len(phone) >= 10:
-                        result["phone"] = phone
-                        break
-        
-        # Extract social media
-        social_patterns = ['facebook.com', 'instagram.com', 'twitter.com', 'x.com', 'linkedin.com', 
-                          'tiktok.com', 'youtube.com', 'pinterest.com']
-        social_urls = set()
-        for link in soup.select('a[href]'):
-            href = link.get('href', '').lower()
-            for platform in social_patterns:
-                if platform in href:
-                    full_url = urljoin(url, link.get('href'))
-                    social_urls.add(full_url)
-        result["social_media"] = list(social_urls)
-        
-        return result
-    except Exception as e:
-        print(f"Error scraping contact page: {e}")
-        return {"email": None, "phone": None, "social_media": []}
-
-# --- Core agent function ---
-def run_vendor_agent(vendor_url):
-    state_log = []
-    result = {
-        "name": None,
-        "description": None,
-        "email": None,
-        "phone": None,
-        "social_media": [],
-        "state_log": state_log
-    }
-
-    # --- Step 1: Try regular scraping first (FREE, no AGI API credits) ---
-    print("Step 1: Scraping main page with regular HTTP requests...")
-    scraped_data = scrape_basic_info(vendor_url)
-    state_log.append({"step": "Regular Scraping", "success": True})
-    
-    # Use scraped data as baseline
-    result["name"] = scraped_data.get("name")
-    result["description"] = scraped_data.get("description")
-    result["email"] = scraped_data.get("email")
-    result["phone"] = scraped_data.get("phone")
-    result["social_media"] = scraped_data.get("social_media", [])
-    
-    print(f"Scraped main page: name={result['name']}, email={result['email']}, phone={result['phone']}, social={len(result['social_media'])}")
-    
-    # --- Step 1.5: Also scrape contact page if found (FREE) ---
-    contact_url = find_contact_page_url(vendor_url)
-    if contact_url and contact_url != vendor_url:
-        print(f"Step 1.5: Found contact page, scraping it: {contact_url}")
-        contact_data = scrape_contact_page(contact_url)
-        # Merge contact page data (fill missing fields)
-        if not result["email"] and contact_data.get("email"):
-            result["email"] = contact_data.get("email")
-        if not result["phone"] and contact_data.get("phone"):
-            result["phone"] = contact_data.get("phone")
-        # Merge social media
-        existing_social = set(result["social_media"])
-        for url in contact_data.get("social_media", []):
-            if url not in existing_social:
-                result["social_media"].append(url)
-        print(f"After contact page scrape: email={result['email']}, phone={result['phone']}, social={len(result['social_media'])}")
-    
-    # Check if we need AGI API (prioritize email/phone over social media)
-    # Only skip AGI if we have email OR phone (social media alone is not enough)
-    has_email_or_phone = result["email"] or result["phone"]
-    
-    if has_email_or_phone:
-        print(f"✓ Email/phone found via scraping (email={result['email']}, phone={result['phone']}). Skipping AGI API (saving credits).")
-        return result
-    
-    # If we only have social media but no email/phone, still use AGI to find email/phone
-    if result["social_media"]:
-        print(f"Found {len(result['social_media'])} social media links, but email/phone missing. Using AGI API to find email/phone...")
-    else:
-        print("No email, phone, or social media found. Using AGI API to find contact info...")
-    
-    # --- Step 2: Use AGI API ONLY for finding contact info on support/help pages ---
-    print("Step 2: Contact info still missing. Using AGI API to navigate to support/help pages...")
-    
-    if not contact_url:
-        print("No contact page found via common paths, will use AGI to find it")
-        contact_url = vendor_url
-
-    # --- Step 3: Create AGI session (only when needed) ---
-    def create_session():
+def create_agi_session():
+    """Create a new AGI session"""
+    def _create():
         print("Creating AGI session...")
         resp = requests.post(
-            f"{BASE_URL}/sessions",
+            f"{AGI_BASE_URL}/sessions",
             headers={"Authorization": f"Bearer {AGI_API_KEY}"},
             json={"agent_name": "agi-0"},
             timeout=60
         )
         resp.raise_for_status()
-        return resp.json().get("session_id")
+        return resp.json()["session_id"]
+    
+    session_id, state = retry_request(_create)
+    return session_id, state
 
-    session_id, state = retry_request(create_session)
-    state_log.append({"step": "Create AGI Session", **state})
-    if not state["success"]:
-        return result
-
-    # --- Step 4: Send minimal, targeted instructions (only for contact info) ---
-    def send_task():
-        message = f"""
-            You are on: {contact_url}
-            
-            YOUR TASK: Find contact information (email, phone, or social media links).
-            
-            STEP 1: Look on the current page for:
-            - Email addresses (check mailto: links, text content, contact forms)
-            - Phone numbers (check tel: links, text content)
-            - Social media links (Facebook, Instagram, Twitter/X, LinkedIn, TikTok, YouTube, Pinterest)
-            
-            STEP 2: If you don't find contact info, navigate to other pages:
-            1. Scroll to the bottom of the page to see the footer
-            2. Look for links with text like: "Support", "Help", "Contact", "Contact Us", "Get in Touch", "Customer Service"
-            3. Click on those links to go to contact/support pages
-            4. Extract contact info from those pages
-            
-            STEP 3: Return your findings as JSON:
-            {{
-                "email": "email@example.com" or null,
-                "phone": "+1-234-567-8900" or null,
-                "social_media": ["https://facebook.com/page", "https://instagram.com/page"] or []
-            }}
-            
-            IMPORTANT: You must find at least ONE contact method (email, phone, or social media). Keep searching until you find something.
-        """
-        print("Sending targeted AGI instructions for contact info...")
+def send_agi_message(session_id, message):
+    """Send a message to an AGI agent"""
+    def _send():
         resp = requests.post(
-            f"{BASE_URL}/sessions/{session_id}/message",
+            f"{AGI_BASE_URL}/sessions/{session_id}/message",
             headers={"Authorization": f"Bearer {AGI_API_KEY}"},
             json={"message": message},
             timeout=60
         )
         resp.raise_for_status()
         return True
+    
+    result, state = retry_request(_send)
+    return result, state
 
-    _, state = retry_request(send_task)
-    state_log.append({"step": "Send AGI Instructions", **state})
-    if not state["success"]:
-        # Cleanup on failure
-        try:
-            requests.delete(f"{BASE_URL}/sessions/{session_id}", headers={"Authorization": f"Bearer {AGI_API_KEY}"}, timeout=10)
-        except:
-            pass
-        return result
-
-    # --- Step 5: Monitor progress (reduced wait time since we're only getting contact info) ---
+def wait_for_agi_completion(session_id, max_attempts=30, delay=2):
+    """Wait for AGI agent to complete task"""
     finished = False
     attempt = 0
-    while not finished and attempt < 30:  # Increased to allow more time for navigation
+    while not finished and attempt < max_attempts:
         attempt += 1
-        def get_status():
+        def _get_status():
             resp = requests.get(
-                f"{BASE_URL}/sessions/{session_id}/status",
+                f"{AGI_BASE_URL}/sessions/{session_id}/status",
                 headers={"Authorization": f"Bearer {AGI_API_KEY}"},
                 timeout=30
             )
             resp.raise_for_status()
             return resp.json()
-
-        status, _ = retry_request(get_status)
-        if status:
-            status_value = status.get("status", "unknown")
-            print(f"AGI status check {attempt}: {status_value}")
-            if status_value in ["finished", "error"]:
-                finished = True
-            else:
-                time.sleep(3)  # Increased wait time for navigation
+        
+        status, _ = retry_request(_get_status)
+        if status and status.get("status") in ["finished", "error"]:
+            finished = True
         else:
-            time.sleep(3)
+            time.sleep(delay)
+    
+    return status
 
-    # --- Step 6: Get results ---
-    def get_results():
+def get_agi_results(session_id):
+    """Get results from AGI agent"""
+    def _get_results():
         resp = requests.get(
-            f"{BASE_URL}/sessions/{session_id}/messages",
+            f"{AGI_BASE_URL}/sessions/{session_id}/messages",
             headers={"Authorization": f"Bearer {AGI_API_KEY}"},
             timeout=30
         )
         resp.raise_for_status()
         messages = resp.json().get("messages", [])
-        print(f"Received {len(messages)} messages from AGI")
-        
         for msg in messages:
-            msg_type = msg.get("type", "")
-            content = msg.get("content", "")
-            print(f"Message type: {msg_type}, content preview: {str(content)[:200] if content else 'empty'}")
-            
-            if msg_type == "DONE":
-                try:
-                    if isinstance(content, str):
-                        content = json.loads(content)
-                    print(f"Parsed AGI response: {content}")
-                    return content
-                except (json.JSONDecodeError, TypeError) as e:
-                    print(f"Failed to parse AGI response as JSON: {e}")
-                    # Try to extract email/phone from plain text
-                    if isinstance(content, str):
-                        email_match = re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', content)
-                        phone_match = re.search(r'\+?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', content)
-                        result = {}
-                        if email_match:
-                            result["email"] = email_match.group(0)
-                        if phone_match:
-                            result["phone"] = phone_match.group(0)
-                        if result:
-                            return result
-                    return {}
+            if msg.get("type") == "DONE":
+                return msg.get("content")
         return {}
-
-    agi_data, state = retry_request(get_results)
-    state_log.append({"step": "Get AGI Results", **state})
     
-    # Merge AGI results (only fill missing contact fields)
-    if agi_data:
-        if not result["email"] and agi_data.get("email"):
-            result["email"] = agi_data.get("email")
-        if not result["phone"] and agi_data.get("phone"):
-            result["phone"] = agi_data.get("phone")
-        agi_social = agi_data.get("social_media", [])
-        if isinstance(agi_social, list):
-            # Merge social media, avoiding duplicates
-            existing_social = set(result["social_media"])
-            for url in agi_social:
-                if url not in existing_social:
-                    result["social_media"].append(url)
-        
-        print(f"AGI found: email={result['email']}, phone={result['phone']}, social={len(result['social_media'])}")
+    data, state = retry_request(_get_results)
+    return data, state
 
-    # --- Step 7: Cleanup ---
-    try:
-        requests.delete(f"{BASE_URL}/sessions/{session_id}", headers={"Authorization": f"Bearer {AGI_API_KEY}"}, timeout=10)
-    except:
-        pass
-    state_log.append({"step": "Cleanup", "success": True})
+def cleanup_agi_session(session_id):
+    """Clean up AGI session"""
+    def _cleanup():
+        resp = requests.delete(
+            f"{AGI_BASE_URL}/sessions/{session_id}",
+            headers={"Authorization": f"Bearer {AGI_API_KEY}"},
+            timeout=30
+        )
+        resp.raise_for_status()
+        return True
+    
+    _, state = retry_request(_cleanup)
+    return state
 
+# ------------------------
+# Workflow helper functions
+# ------------------------
+
+def run_flyout_workflow(p):
+    """Main linear workflow using AGI agents. Each step uses an AGI agent to perform the task."""
+    timeline = []
+    state_log = []
+
+    # 1) Buy flight using AGI
+    print("\n[Step 1/5] Using AGI agent to book flight...")
+    flight_resp = buy_flight_agi(p, state_log)
+    print(f"Flight result: {flight_resp}")
+    timeline.append({'step': 'buy_flight', 'result': flight_resp})
+
+    # 2) Order Uber using AGI
+    print("\n[Step 2/5] Using AGI agent to order Uber...")
+    if flight_resp.get('success') and flight_resp.get('arrival_time'):
+        arrival_time_iso = flight_resp.get('arrival_time')
+        try:
+            eta = datetime.datetime.fromisoformat(arrival_time_iso)
+        except Exception as e:
+            print(f"Warning: Could not parse arrival_time '{arrival_time_iso}': {e}")
+            eta = None
+        uber_resp = order_uber_agi(p, eta, state_log)
+    else:
+        print("Skipping Uber order due to flight failure")
+        uber_resp = {'success': False, 'error': 'Skipped due to flight failure'}
+    print(f"Uber result: {uber_resp}")
+    timeline.append({'step': 'order_uber', 'result': uber_resp})
+
+    # 3) Dining or Food order using AGI
+    print(f"\n[Step 3/5] Using AGI agent for dining (mode: {p.get('eat_mode')})...")
+    if p.get('eat_mode') == 'out':
+        dine_resp = book_opendining_agi(p, flight_resp, state_log)
+    else:
+        dine_resp = order_doordash_agi(p, flight_resp, state_log)
+    print(f"Dining result: {dine_resp}")
+    timeline.append({'step': 'dining', 'result': dine_resp})
+
+    # 4) Book lodging using AGI
+    print(f"\n[Step 4/5] Using AGI agent to book lodging ({p.get('lodging')})...")
+    lodging_resp = book_lodging_agi(p, state_log)
+    print(f"Lodging result: {lodging_resp}")
+    timeline.append({'step': 'lodging', 'result': lodging_resp})
+
+    # 5) Add to calendar using AGI
+    print("\n[Step 5/5] Using AGI agent to add to calendar...")
+    calendar_resp = add_to_calendar_agi(p, flight_resp, lodging_resp, state_log)
+    print(f"Calendar result: {calendar_resp}")
+    timeline.append({'step': 'calendar', 'result': calendar_resp})
+
+    result = {
+        'workflow_id': f"wf_{int(time.time())}",
+        'submitted': datetime.datetime.utcnow().isoformat() + 'Z',
+        'timeline': timeline,
+        'state_log': state_log,
+    }
+    print("\n=== Workflow Complete ===")
     return result
 
-# --- Flask route ---
-@app.route("/run-agent", methods=["POST"])
-def run_agent():
-    data = request.get_json()
-    vendor_url = data.get("vendor_url")
-    if not vendor_url:
-        return jsonify({"error": "Missing vendor_url"}), 400
 
-    result = run_vendor_agent(vendor_url)
-    return jsonify(result)
+# 1) Buy flight using AGI
+def buy_flight_agi(p, state_log):
+    """Use AGI agent to book a flight"""
+    session_id = None
+    try:
+        # Create AGI session
+        session_id, state = create_agi_session()
+        state_log.append({"step": "Create Session (Flight)", **state})
+        if not state["success"]:
+            return {'success': False, 'error': 'Failed to create AGI session'}
+        
+        # Send task to AGI agent with clear, specific instructions
+        message = f"""
+Go to {ENDPOINTS['flight']} and book a flight with the following details:
 
-if __name__ == "__main__":
+- From: {p['from']}
+- To: {p['to']}
+- Departure date: {p['depart_date']}
+- Number of passengers: {p['num_travelers']}
+
+Complete the booking process and extract the following information:
+
+1. Booking confirmation number
+2. Departure time (ISO format)
+3. Arrival time (ISO format)
+4. Flight number
+5. Total price
+6. Booking status (confirmed/pending/failed)
+
+Return the result as JSON in this exact format:
+
+{{
+    "success": true,
+    "confirmation_number": "ABC123",
+    "departure_time": "2024-01-15T08:00:00Z",
+    "arrival_time": "2024-01-15T11:30:00Z",
+    "flight_number": "UA123",
+    "price": 299.99,
+    "status": "confirmed",
+    "details": {{}}
+}}
+
+If booking fails or the service is unavailable:
+- Set "success": false
+- Include "error": "description of what went wrong"
+- Still return valid JSON
+
+Return ONLY valid JSON, no markdown formatting or explanations.
+"""
+        
+        _, state = send_agi_message(session_id, message)
+        state_log.append({"step": "Send Flight Booking Task", **state})
+        if not state["success"]:
+            return {'success': False, 'error': 'Failed to send task to AGI agent'}
+        
+        # Wait for completion
+        print("  Waiting for AGI agent to complete flight booking...")
+        status = wait_for_agi_completion(session_id)
+        state_log.append({"step": "Wait for Flight Booking", "status": status})
+        
+        # Get results
+        data, state = get_agi_results(session_id)
+        state_log.append({"step": "Get Flight Booking Results", **state})
+        
+        # Parse results
+        if data:
+            try:
+                if isinstance(data, str):
+                    data = json.loads(data)
+                if data.get('success'):
+                    return {
+                        'success': True,
+                        'details': data,
+                        'arrival_time': data.get('arrival_time'),
+                        'confirmation_number': data.get('confirmation_number')
+                    }
+                else:
+                    return {'success': False, 'error': data.get('error', 'Booking failed')}
+            except Exception as e:
+                print(f"  Error parsing AGI response: {e}")
+                return {'success': False, 'error': f'Failed to parse response: {str(e)}'}
+        else:
+            return {'success': False, 'error': 'No results from AGI agent'}
+    
+    finally:
+        if session_id:
+            cleanup_state = cleanup_agi_session(session_id)
+            state_log.append({"step": "Cleanup Session (Flight)", **cleanup_state})
+
+
+# 2) Order Uber using AGI
+def order_uber_agi(p, arrival_dt=None, state_log=None):
+    """Use AGI agent to order an Uber ride"""
+    if state_log is None:
+        state_log = []
+    
+    # Calculate scheduled time
+    if arrival_dt:
+        scheduled_time = (arrival_dt + datetime.timedelta(minutes=15)).isoformat()
+    else:
+        scheduled_time = p['depart_date'] + 'T18:30:00'
+    
+    session_id = None
+    try:
+        session_id, state = create_agi_session()
+        state_log.append({"step": "Create Session (Uber)", **state})
+        if not state["success"]:
+            return {'success': False, 'error': 'Failed to create AGI session'}
+        
+        message = f"""
+Go to {ENDPOINTS['uber']} and order an Uber ride with these details:
+
+- Pickup location: airport
+- Dropoff location: guest_address_placeholder
+- Scheduled time: {scheduled_time}
+- Number of riders: {p['num_travelers']}
+
+Complete the order and extract:
+
+1. Order confirmation number
+2. Estimated pickup time
+3. Estimated arrival time
+4. Driver name (if available)
+5. Vehicle type
+6. Total fare
+7. Order status
+
+Return as JSON:
+
+{{
+    "success": true,
+    "confirmation_number": "UBER123",
+    "pickup_time": "2024-01-15T11:45:00Z",
+    "estimated_arrival": "2024-01-15T12:30:00Z",
+    "driver_name": "John D.",
+    "vehicle_type": "UberX",
+    "fare": 25.50,
+    "status": "confirmed"
+}}
+
+If order fails, set "success": false and include error message.
+Return ONLY valid JSON.
+"""
+        
+        _, state = send_agi_message(session_id, message)
+        state_log.append({"step": "Send Uber Order Task", **state})
+        if not state["success"]:
+            return {'success': False, 'error': 'Failed to send task to AGI agent'}
+        
+        print("  Waiting for AGI agent to complete Uber order...")
+        status = wait_for_agi_completion(session_id)
+        state_log.append({"step": "Wait for Uber Order", "status": status})
+        
+        data, state = get_agi_results(session_id)
+        state_log.append({"step": "Get Uber Order Results", **state})
+        
+        if data:
+            try:
+                if isinstance(data, str):
+                    data = json.loads(data)
+                if data.get('success'):
+                    return {'success': True, 'details': data}
+                else:
+                    return {'success': False, 'error': data.get('error', 'Order failed')}
+            except Exception as e:
+                return {'success': False, 'error': f'Failed to parse response: {str(e)}'}
+        else:
+            return {'success': False, 'error': 'No results from AGI agent'}
+    
+    finally:
+        if session_id:
+            cleanup_state = cleanup_agi_session(session_id)
+            state_log.append({"step": "Cleanup Session (Uber)", **cleanup_state})
+
+
+# 3a) Book OpenDining using AGI
+def book_opendining_agi(p, flight_resp, state_log=None):
+    """Use AGI agent to book a restaurant reservation"""
+    if state_log is None:
+        state_log = []
+    
+    # Calculate preferred time
+    if flight_resp.get('arrival_time'):
+        try:
+            arrival = datetime.datetime.fromisoformat(flight_resp.get('arrival_time'))
+            preferred_time = (arrival + datetime.timedelta(hours=1)).isoformat()
+        except Exception:
+            preferred_time = p['depart_date'] + 'T19:00:00'
+    else:
+        preferred_time = p['depart_date'] + 'T19:00:00'
+    
+    session_id = None
+    try:
+        session_id, state = create_agi_session()
+        state_log.append({"step": "Create Session (Dining)", **state})
+        if not state["success"]:
+            return {'success': False, 'error': 'Failed to create AGI session'}
+        
+        message = f"""
+Go to {ENDPOINTS['opendining']} and book a restaurant reservation:
+
+- Party size: {p['num_travelers']}
+- Date and time: {preferred_time}
+- Special notes: Guest arriving by plane; please seat promptly.
+
+Complete the reservation and extract:
+
+1. Reservation confirmation number
+2. Restaurant name
+3. Reservation time
+4. Table number (if available)
+5. Status (confirmed/pending)
+
+Return as JSON:
+
+{{
+    "success": true,
+    "confirmation_number": "RES456",
+    "restaurant_name": "Fine Dining",
+    "reservation_time": "{preferred_time}",
+    "table_number": "12",
+    "status": "confirmed"
+}}
+
+If booking fails, set "success": false with error details.
+Return ONLY valid JSON.
+"""
+        
+        _, state = send_agi_message(session_id, message)
+        state_log.append({"step": "Send Dining Reservation Task", **state})
+        if not state["success"]:
+            return {'success': False, 'error': 'Failed to send task to AGI agent'}
+        
+        print("  Waiting for AGI agent to complete dining reservation...")
+        status = wait_for_agi_completion(session_id)
+        state_log.append({"step": "Wait for Dining Reservation", "status": status})
+        
+        data, state = get_agi_results(session_id)
+        state_log.append({"step": "Get Dining Reservation Results", **state})
+        
+        if data:
+            try:
+                if isinstance(data, str):
+                    data = json.loads(data)
+                if data.get('success'):
+                    return {'success': True, 'details': data}
+                else:
+                    return {'success': False, 'error': data.get('error', 'Reservation failed')}
+            except Exception as e:
+                return {'success': False, 'error': f'Failed to parse response: {str(e)}'}
+        else:
+            return {'success': False, 'error': 'No results from AGI agent'}
+    
+    finally:
+        if session_id:
+            cleanup_state = cleanup_agi_session(session_id)
+            state_log.append({"step": "Cleanup Session (Dining)", **cleanup_state})
+
+
+# 3b) Order DoorDash using AGI
+def order_doordash_agi(p, flight_resp, state_log=None):
+    """Use AGI agent to order food delivery"""
+    if state_log is None:
+        state_log = []
+    
+    # Calculate delivery time
+    if flight_resp.get('arrival_time'):
+        try:
+            arrival = datetime.datetime.fromisoformat(flight_resp.get('arrival_time'))
+            delivery_time = (arrival + datetime.timedelta(minutes=45)).isoformat()
+        except Exception:
+            delivery_time = p['depart_date'] + 'T20:00:00'
+    else:
+        delivery_time = p['depart_date'] + 'T20:00:00'
+    
+    session_id = None
+    try:
+        session_id, state = create_agi_session()
+        state_log.append({"step": "Create Session (Food Delivery)", **state})
+        if not state["success"]:
+            return {'success': False, 'error': 'Failed to create AGI session'}
+        
+        message = f"""
+Go to {ENDPOINTS['doordash']} and place a food delivery order:
+
+- Delivery address: guest_address_placeholder
+- Delivery time: {delivery_time}
+- Items to order: dinner_box, bottle_of_wine
+
+Complete the order and extract:
+
+1. Order confirmation number
+2. Estimated delivery time
+3. Restaurant name
+4. Total price
+5. Order status
+
+Return as JSON:
+
+{{
+    "success": true,
+    "confirmation_number": "DD789",
+    "estimated_delivery": "{delivery_time}",
+    "restaurant_name": "Local Restaurant",
+    "total_price": 45.99,
+    "status": "confirmed"
+}}
+
+If order fails, set "success": false with error message.
+Return ONLY valid JSON.
+"""
+        
+        _, state = send_agi_message(session_id, message)
+        state_log.append({"step": "Send Food Order Task", **state})
+        if not state["success"]:
+            return {'success': False, 'error': 'Failed to send task to AGI agent'}
+        
+        print("  Waiting for AGI agent to complete food order...")
+        status = wait_for_agi_completion(session_id)
+        state_log.append({"step": "Wait for Food Order", "status": status})
+        
+        data, state = get_agi_results(session_id)
+        state_log.append({"step": "Get Food Order Results", **state})
+        
+        if data:
+            try:
+                if isinstance(data, str):
+                    data = json.loads(data)
+                if data.get('success'):
+                    return {'success': True, 'details': data}
+                else:
+                    return {'success': False, 'error': data.get('error', 'Order failed')}
+            except Exception as e:
+                return {'success': False, 'error': f'Failed to parse response: {str(e)}'}
+        else:
+            return {'success': False, 'error': 'No results from AGI agent'}
+    
+    finally:
+        if session_id:
+            cleanup_state = cleanup_agi_session(session_id)
+            state_log.append({"step": "Cleanup Session (Food Delivery)", **cleanup_state})
+
+
+# 4) Book lodging using AGI
+def book_lodging_agi(p, state_log=None):
+    """Use AGI agent to book lodging"""
+    if state_log is None:
+        state_log = []
+    
+    provider = p.get('lodging')
+    url = ENDPOINTS['airbnb'] if provider == 'airbnb' else ENDPOINTS['marriott']
+    checkout_date = p['return_date'] or (datetime.date.fromisoformat(p['depart_date']) + datetime.timedelta(days=2)).isoformat()
+    
+    session_id = None
+    try:
+        session_id, state = create_agi_session()
+        state_log.append({"step": "Create Session (Lodging)", **state})
+        if not state["success"]:
+            return {'success': False, 'error': 'Failed to create AGI session'}
+        
+        message = f"""
+Go to {url} and book {provider} accommodation:
+
+- City: {p['to']}
+- Check-in date: {p['depart_date']}
+- Check-out date: {checkout_date}
+- Number of guests: {p['num_travelers']}
+
+Complete the booking and extract:
+
+1. Booking confirmation number
+2. Property name/address
+3. Check-in time
+4. Check-out time
+5. Total price
+6. Booking status
+
+Return as JSON:
+
+{{
+    "success": true,
+    "confirmation_number": "LODGING123",
+    "property_name": "Cozy Apartment",
+    "checkin_time": "{p['depart_date']}T15:00:00Z",
+    "checkout_time": "{checkout_date}T11:00:00Z",
+    "total_price": 250.00,
+    "status": "confirmed"
+}}
+
+If booking fails, set "success": false with error details.
+Return ONLY valid JSON.
+"""
+        
+        _, state = send_agi_message(session_id, message)
+        state_log.append({"step": "Send Lodging Booking Task", **state})
+        if not state["success"]:
+            return {'success': False, 'error': 'Failed to send task to AGI agent'}
+        
+        print(f"  Waiting for AGI agent to complete {provider} booking...")
+        status = wait_for_agi_completion(session_id)
+        state_log.append({"step": "Wait for Lodging Booking", "status": status})
+        
+        data, state = get_agi_results(session_id)
+        state_log.append({"step": "Get Lodging Booking Results", **state})
+        
+        if data:
+            try:
+                if isinstance(data, str):
+                    data = json.loads(data)
+                if data.get('success'):
+                    return {'success': True, 'details': data}
+                else:
+                    return {'success': False, 'error': data.get('error', 'Booking failed')}
+            except Exception as e:
+                return {'success': False, 'error': f'Failed to parse response: {str(e)}'}
+        else:
+            return {'success': False, 'error': 'No results from AGI agent'}
+    
+    finally:
+        if session_id:
+            cleanup_state = cleanup_agi_session(session_id)
+            state_log.append({"step": "Cleanup Session (Lodging)", **cleanup_state})
+
+
+# 5) Add to calendar using AGI
+def add_to_calendar_agi(p, flight_resp, lodging_resp, state_log=None):
+    """Use AGI agent to add events to calendar"""
+    if state_log is None:
+        state_log = []
+    
+    # Prepare events data
+    events = []
+    if flight_resp.get('success'):
+        flight_details = flight_resp.get('details', {})
+        events.append({
+            'title': f"Flight {p['from']} → {p['to']}",
+            'start': flight_details.get('departure_time', p['depart_date'] + 'T08:00:00'),
+            'end': flight_details.get('arrival_time', p['depart_date'] + 'T12:00:00'),
+            'description': 'Auto-booked flight'
+        })
+
+    if lodging_resp.get('success'):
+        checkout_date = p['return_date'] or (datetime.date.fromisoformat(p['depart_date']) + datetime.timedelta(days=2)).isoformat()
+        events.append({
+            'title': f"Stay: {p['lodging']}",
+            'start': p['depart_date'],
+            'end': checkout_date,
+            'description': 'Auto-booked lodging'
+        })
+
+    if not events:
+        print("  Warning: No events to add to calendar")
+        return {'success': False, 'error': 'No events to add'}
+
+    session_id = None
+    try:
+        session_id, state = create_agi_session()
+        state_log.append({"step": "Create Session (Calendar)", **state})
+        if not state["success"]:
+            return {'success': False, 'error': 'Failed to create AGI session'}
+        
+        events_json = json.dumps(events, indent=2)
+        
+        message = f"""
+Go to {ENDPOINTS['calendar']} and add the following events to the calendar:
+
+{events_json}
+
+Add all events and extract:
+
+1. Calendar confirmation
+2. Number of events added
+3. Event IDs (if available)
+4. Status
+
+Return as JSON:
+
+{{
+    "success": true,
+    "events_added": {len(events)},
+    "event_ids": ["evt1", "evt2"],
+    "status": "confirmed"
+}}
+
+If adding events fails, set "success": false with error message.
+Return ONLY valid JSON.
+"""
+        
+        _, state = send_agi_message(session_id, message)
+        state_log.append({"step": "Send Calendar Task", **state})
+        if not state["success"]:
+            return {'success': False, 'error': 'Failed to send task to AGI agent'}
+        
+        print("  Waiting for AGI agent to add calendar events...")
+        status = wait_for_agi_completion(session_id)
+        state_log.append({"step": "Wait for Calendar Update", "status": status})
+        
+        data, state = get_agi_results(session_id)
+        state_log.append({"step": "Get Calendar Results", **state})
+        
+        if data:
+            try:
+                if isinstance(data, str):
+                    data = json.loads(data)
+                if data.get('success'):
+                    return {'success': True, 'details': data}
+                else:
+                    return {'success': False, 'error': data.get('error', 'Calendar update failed')}
+            except Exception as e:
+                return {'success': False, 'error': f'Failed to parse response: {str(e)}'}
+        else:
+            return {'success': False, 'error': 'No results from AGI agent'}
+    
+    finally:
+        if session_id:
+            cleanup_state = cleanup_agi_session(session_id)
+            state_log.append({"step": "Cleanup Session (Calendar)", **cleanup_state})
+
+
+if __name__ == '__main__':
     app.run(debug=True)
