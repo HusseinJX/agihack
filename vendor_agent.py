@@ -220,10 +220,12 @@ def run_flyout_workflow(p):
     state_log = []
 
     # 1) Buy flight using AGI
-    # print("\n[Step 1/5] Using AGI agent to book flight...")
-    # flight_resp = buy_flight_agi(p, state_log)
-    # print(f"Flight result: {flight_resp}")
-    # timeline.append({'step': 'buy_flight', 'result': flight_resp})
+    print("\n[Step 1/5] Using AGI agent to book flight...")
+    flight_resp = buy_flight_agi(p, state_log)
+    print(f"Flight result: {flight_resp}")
+    timeline.append({'step': 'buy_flight', 'result': flight_resp})
+
+
 
     # 2) Order Uber using AGI (needs flight details for timing)
     print("\n[Step 2/5] Using AGI agent to order Uber...")
@@ -238,16 +240,14 @@ def run_flyout_workflow(p):
     uber_resp = order_uber_agi(p, state_log)
     print(f"Uber result: {uber_resp}")
     timeline.append({'step': 'order_uber', 'result': uber_resp})
-    
-    result = {
-        'workflow_id': f"wf_{int(time.time())}",
-        'submitted': datetime.datetime.utcnow().isoformat() + 'Z',
-        'timeline': timeline,
-        'state_log': state_log,
-    }
-    print("\n=== Workflow Complete ===")
-    return result
 
+
+
+    # 3) Book lodging using AGI
+    print("\n[Step 3/5] Using AGI agent to book lodging...")
+    lodging_resp = book_lodging_agi(p, state_log)
+    print(f"Lodging result: {lodging_resp}")
+    timeline.append({'step': 'book_lodging', 'result': lodging_resp})
 
 
 
@@ -405,8 +405,73 @@ def order_uber_agi(p, state_log):
             state_log.append({"step": "Cleanup Session (Uber)", **cleanup_state})
 
 
+# step 3: book lodging using AGI
+def book_lodging_agi(p, state_log):
+    """Book a lodging using the AGI agent. Returns a dict with booking results."""
+    session_id = None
+    data = {
+        # from july 19 2024 to july 21 2024
+        "destination": "San Francisco",
+        "checkin_date": "2024-07-19",
+        "checkout_date": "2024-07-21",
+        "firstname": "Belle",
+        "lastname": "Vue",
+        "email": "belle@vue.com",
+        "country": "USA",
+        "address": "100 Van Ness",
+        "city": "San Francisco",
+        "state": "CA",
+        "postal_code": "94101",
+        "cardholder_name": "Belle Vue",
+        "card_number": "1234567890123456",
+        "expiration_date": "01/2025",
+        "cvv": "123",
 
+    }
 
+    try:
+        # 1. Create AGI session
+        session_id, state = create_agi_session()
+        state_log.append({"step": "Create Session (Lodging)", **state})
+        if not state.get("success"):
+            return {'success': False, 'error': 'Failed to create AGI session'}
+        
+        # 2. Compose booking instructions using flight details
+        message = f"Go to {ENDPOINTS['marriott']} and book a lodging with these details: {data}"
+        # 3. Send booking request to AGI
+        _, state = send_agi_message(session_id, message)
+        state_log.append({"step": "Send Lodging Booking Task", **state})
+        if not state.get("success"):
+            return {'success': False, 'error': 'Failed to send task to AGI agent'}
+        
+        # 4. Wait for completion & collect result
+        print("  Waiting for AGI agent to complete lodging booking...")
+        status = wait_for_agi_completion(session_id)
+        state_log.append({"step": "Wait for Lodging Booking", "status": status})
+        data, state = get_agi_results(session_id)
+        state_log.append({"step": "Get Lodging Booking Results", **state})
+        
+        # 5. Parse and return result
+        if not data:
+            return {'success': False, 'error': 'No results from AGI agent'}
+        try:
+            if isinstance(data, str):
+                data = json.loads(data)
+        except Exception as e:
+            print(f"  Error parsing AGI response: {e}")     
+            return {'success': False, 'error': f'Failed to parse response: {e}'}
+        if data.get('success'):
+            return {
+                'success': True,
+                'details': data,
+                'confirmation_number': data.get('confirmation_number')
+            }
+        return {'success': False, 'error': data.get('error', 'Booking failed')}
+    finally:
+        if session_id:
+            cleanup_state = cleanup_agi_session(session_id)
+            state_log.append({"step": "Cleanup Session (Lodging)", **cleanup_state})
+    return data
 
 
 
