@@ -250,6 +250,11 @@ def run_flyout_workflow(p):
     timeline.append({'step': 'book_lodging', 'result': lodging_resp})
 
 
+    # 4) Book dining using AGI
+    print("\n[Step 4/5] Using AGI agent to book dining...")
+    dining_resp = book_dining_agi(p, state_log)
+    print(f"Dining result: {dining_resp}")
+    timeline.append({'step': 'book_dining', 'result': dining_resp})
 
 
 
@@ -473,6 +478,85 @@ def book_lodging_agi(p, state_log):
             state_log.append({"step": "Cleanup Session (Lodging)", **cleanup_state})
     return data
 
+
+# step 4: book dining using AGI
+def book_dining_agi(p, state_log):
+    """Book a dining using the AGI agent. Returns a dict with booking results."""
+    session_id = None
+
+    # if eat_mode is in, book dining using doordash, else book dining using opendining
+    if p['eat_mode'] == 'in':
+        data = {
+            ENDPOINTS['doordash']: {
+                "cuisine":"asian",
+                "restaurant_name":"moonbowls - Healthy Korean Bowls",
+                "food":"korean bbq bowl",
+                "size":"12oz",
+                "preference":"spicy",
+            }
+        }
+    else:   
+        data = {
+            ENDPOINTS['opendining']: {
+                "restaurant_name": "Evening Delight",
+                "people": 2,
+                "date": "November 24 2025",
+                "time": "5:00 PM",
+                "phone": "6287345655",
+                "email": "belle@vue.com",
+                "note": "Dom Pérignon",
+            }
+        }
+
+    # return data
+    try:
+        # 1. Create AGI session
+        session_id, state = create_agi_session()
+        state_log.append({"step": "Create Session (Dining)", **state})
+        if not state.get("success"):
+            return {'success': False, 'error': 'Failed to create AGI session'}
+        
+        # 2. Compose booking instructions using flight details
+        # go to doordash or opendining based on eat_mode
+        if p['eat_mode'] == 'in':
+            message = f"Go to {ENDPOINTS['doordash']} and book a dining with these details: {data}"
+        else:
+            message = f"Go to {ENDPOINTS['opendining']} and book a dining with these details: {data}"
+
+        # 3. Send booking request to AGI
+        _, state = send_agi_message(session_id, message)
+        state_log.append({"step": "Send Dining Booking Task", **state})
+        if not state.get("success"):
+            return {'success': False, 'error': 'Failed to send task to AGI agent'}
+        
+        # 4. Wait for completion & collect result
+        print("  Waiting for AGI agent to complete dining booking...")
+        status = wait_for_agi_completion(session_id)
+        state_log.append({"step": "Wait for Dining Booking", "status": status})
+        data, state = get_agi_results(session_id)
+        state_log.append({"step": "Get Dining Booking Results", **state})
+        
+        # 5. Parse and return result
+        if not data:
+            return {'success': False, 'error': 'No results from AGI agent'}
+        try:
+            if isinstance(data, str):
+                data = json.loads(data)
+        except Exception as e:
+            print(f"  Error parsing AGI response: {e}")
+            return {'success': False, 'error': f'Failed to parse response: {e}'}
+        if data.get('success'):
+            return {
+                'success': True,
+                'details': data,
+                'confirmation_number': data.get('confirmation_number')
+            }
+        return {'success': False, 'error': data.get('error', 'Booking failed')}
+    finally:
+        if session_id:
+            cleanup_state = cleanup_agi_session(session_id)
+            state_log.append({"step": "Cleanup Session (Dining)", **cleanup_state})
+    return data
 
 
 if __name__ == '__main__':
