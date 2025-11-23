@@ -213,10 +213,16 @@
         return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
       }
       
-      function createDatePicker(input, hiddenInput, popup) {
-        let currentDate = new Date();
-        let selectedDate = null;
+      function createDatePicker(input, hiddenInput, popup, defaultDate = null) {
+        let currentDate = defaultDate ? new Date(defaultDate) : new Date();
+        let selectedDate = defaultDate ? new Date(defaultDate) : null;
         let isOpen = false;
+        
+        // Set initial display and hidden values if default date is provided
+        if (defaultDate && selectedDate) {
+          input.value = formatDisplayDate(selectedDate);
+          hiddenInput.value = formatDate(selectedDate);
+        }
         
         function renderCalendar() {
           const year = currentDate.getFullYear();
@@ -342,7 +348,9 @@
       const departHidden = document.querySelector('input[name="depart_date_value"]');
       const departPopup = document.getElementById('departDatePicker');
       if (departInput && departPopup) {
-        createDatePicker(departInput, departHidden, departPopup);
+        // Set default date to July 19, 2024
+        const defaultDepartDate = new Date(2024, 6, 19); // Month is 0-indexed, so 6 = July
+        createDatePicker(departInput, departHidden, departPopup, defaultDepartDate);
       }
       
       const returnInput = document.querySelector('input[name="return_date"]');
