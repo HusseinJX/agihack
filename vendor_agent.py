@@ -155,7 +155,7 @@ def send_agi_message(session_id, message):
     result, state = retry_request(_send)
     return result, state
 
-def wait_for_agi_completion(session_id, max_attempts=30, delay=2):
+def wait_for_agi_completion(session_id, max_attempts=300, delay=5):
     """Wait for AGI agent to complete task"""
     finished = False
     attempt = 0
@@ -220,12 +220,25 @@ def run_flyout_workflow(p):
     state_log = []
 
     # 1) Buy flight using AGI
-    print("\n[Step 1/5] Using AGI agent to book flight...")
-    flight_resp = buy_flight_agi(p, state_log)
-    print(f"Flight result: {flight_resp}")
-    timeline.append({'step': 'buy_flight', 'result': flight_resp})
+    # print("\n[Step 1/5] Using AGI agent to book flight...")
+    # flight_resp = buy_flight_agi(p, state_log)
+    # print(f"Flight result: {flight_resp}")
+    # timeline.append({'step': 'buy_flight', 'result': flight_resp})
 
+    # 2) Order Uber using AGI (needs flight details for timing)
+    print("\n[Step 2/5] Using AGI agent to order Uber...")
+    # if flight_resp.get('success'):
+    #     uber_resp = order_uber_agi(p, flight_resp, state_log)
+    # else:
+    #     print("Skipping Uber order due to flight failure")
+    #     uber_resp = {'success': False, 'error': 'Skipped due to flight failure'}
+    # print(f"Uber result: {uber_resp}")
+    # timeline.append({'step': 'order_uber', 'result': uber_resp})
 
+    uber_resp = order_uber_agi(p, state_log)
+    print(f"Uber result: {uber_resp}")
+    timeline.append({'step': 'order_uber', 'result': uber_resp})
+    
     result = {
         'workflow_id': f"wf_{int(time.time())}",
         'submitted': datetime.datetime.utcnow().isoformat() + 'Z',
@@ -257,6 +270,7 @@ def buy_flight_agi(p, state_log):
             f"- To: {p['to']}\n"
             f"- Departure date: {p['depart_date']}\n"
             f"- Number of passengers: {p['num_travelers']}\n\n"
+            f"- Passenger details: firstname: Belle, lastname: Vue, gender: F, dateofbirth: August 12 2000\n"
             "Return JSON only, with keys: success, confirmation_number, "
             "departure_time, arrival_time, flight_number, price, status, details. "
             "If failed, set success:false and include error."
@@ -297,6 +311,98 @@ def buy_flight_agi(p, state_log):
             cleanup_state = cleanup_agi_session(session_id)
             state_log.append({"step": "Cleanup Session (Flight)", **cleanup_state})
 
+
+# step 2: order uber using AGI
+def order_uber_agi(p, state_log):
+    """Order a Uber using the AGI agent. 
+    
+    Args:
+        p: Workflow payload with location and traveler info
+        state_log: State log for tracking workflow steps
+    
+    Returns:
+        dict with success status and ordering details
+    """
+    session_id = None
+    
+    # Calculate pickup time (15 minutes after flight arrival)
+    # if arrival_time:
+    #     try:
+    #         # Parse arrival time (could be ISO string or datetime)
+    #         if isinstance(arrival_time, str):
+    #             arrival_dt = datetime.datetime.fromisoformat(arrival_time.replace('Z', '+00:00'))
+    #         else:
+    #             arrival_dt = arrival_time
+    #         pickup_time = arrival_dt + datetime.timedelta(minutes=15)
+    #         pickup_time_str = pickup_time.isoformat()
+    #     except Exception as e:
+    #         print(f"  Warning: Could not parse arrival_time '{arrival_time}': {e}")
+    #         # Fallback: use depart_date + 3 hours + 15 minutes
+    #         depart_dt = datetime.datetime.fromisoformat(p['depart_date'])
+    #         pickup_time = depart_dt + datetime.timedelta(hours=3, minutes=15)
+    #         pickup_time_str = pickup_time.isoformat()
+    # else:
+        # # Fallback if no arrival time
+        # depart_dt = datetime.datetime.fromisoformat(p['depart_date'])
+        # pickup_time = depart_dt + datetime.timedelta(hours=3, minutes=15)
+        # pickup_time_str = pickup_time.isoformat()
+        # print(f"  Warning: No arrival_time in flight response, using fallback: {pickup_time_str}")
+    
+    
+    data = {
+        "pickup_location": "100 Van Ness",
+        "dropoff_location": "1 Hotel San Francisco",
+        "pickup_time": "2024-07-18T16:00:00+00:00",
+        "ride for":"someone else",
+        "rider_name": "Belle Vue",
+        "rider_phone": "6287345655",
+    }
+
+    # return data
+
+    try:
+        # 1. Create AGI session
+        session_id, state = create_agi_session()
+        state_log.append({"step": "Create Session (Uber)", **state})
+        if not state.get("success"):
+            return {'success': False, 'error': 'Failed to create AGI session'}
+        
+        # 2. Compose ordering instructions using flight details
+        message = f"Go to {ENDPOINTS['uber']} and order a Uber ride with these details: {data}"
+
+        # 3. Send ordering request to AGI
+        _, state = send_agi_message(session_id, message)
+        state_log.append({"step": "Send Uber Ordering Task", **state})
+        if not state.get("success"):
+            return {'success': False, 'error': 'Failed to send task to AGI agent'}
+        
+        # 4. Wait for completion & collect result
+        print("  Waiting for AGI agent to complete Uber ordering...")
+        status = wait_for_agi_completion(session_id)
+        state_log.append({"step": "Wait for Uber Ordering", "status": status})
+        data, state = get_agi_results(session_id)
+        state_log.append({"step": "Get Uber Ordering Results", **state})
+        
+        # 5. Parse and return result
+        if not data:
+            return {'success': False, 'error': 'No results from AGI agent'}
+        try:
+            if isinstance(data, str):
+                data = json.loads(data)
+        except Exception as e:
+            print(f"  Error parsing AGI response: {e}")
+            return {'success': False, 'error': f'Failed to parse response: {e}'}
+        if data.get('success'):
+            return {
+                'success': True,
+                'details': data,
+                'confirmation_number': data.get('confirmation_number')
+            }
+        return {'success': False, 'error': data.get('error', 'Ordering failed')}
+    finally:
+        if session_id:
+            cleanup_state = cleanup_agi_session(session_id)
+            state_log.append({"step": "Cleanup Session (Uber)", **cleanup_state})
 
 
 
