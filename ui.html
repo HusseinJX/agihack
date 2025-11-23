@@ -1,283 +1,1029 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
 <head>
-  <title>Vendor Agent Demo</title>
+  <title>Fly-Out Assistant</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; margin: 0; padding: 20px; background: #f5f7fa; }
-    input { width: 400px; padding: 10px; border: 2px solid #e1e8ed; border-radius: 8px; font-size: 14px; }
-    button { padding: 5px 10px; margin-left: 10px; border-radius: 6px; cursor: pointer; }
-    .vendor, .products, .logs { margin-top: 20px; }
-    .product { border: 1px solid #ddd; padding: 10px; margin-bottom: 10px; }
-    pre { background: #f4f4f4; padding: 10px; overflow-x: auto; }
-    
-    /* Pretty View Styles */
-    .pretty-container { display: none; max-width: 1200px; margin: 30px auto; background: white; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); overflow: hidden; }
-    .pretty-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px; color: white; display: flex; align-items: center; gap: 30px; }
-    .pretty-logo { width: 120px; height: 120px; border-radius: 16px; background: white; padding: 10px; object-fit: contain; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
-    .pretty-header-info h1 { margin: 0 0 10px 0; font-size: 36px; font-weight: 700; }
-    .pretty-header-info .location { font-size: 16px; opacity: 0.9; display: flex; align-items: center; gap: 8px; }
-    .pretty-content { padding: 40px; }
-    .pretty-section { margin-bottom: 40px; }
-    .pretty-section h2 { color: #2d3748; font-size: 24px; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid #e2e8f0; }
-    .pretty-description { color: #4a5568; line-height: 1.8; font-size: 16px; }
-    .pretty-contact { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; }
-    .pretty-contact-item { background: #f7fafc; padding: 20px; border-radius: 12px; border-left: 4px solid #667eea; }
-    .pretty-contact-item strong { color: #2d3748; display: block; margin-bottom: 8px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; }
-    .pretty-contact-item span { color: #4a5568; font-size: 15px; }
-    .pretty-social { display: flex; gap: 15px; flex-wrap: wrap; }
-    .pretty-social a { color: #667eea; text-decoration: none; padding: 8px 16px; background: #edf2f7; border-radius: 8px; transition: all 0.3s; }
-    .pretty-social a:hover { background: #667eea; color: white; }
-    .pretty-products { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 24px; }
-    .pretty-product-card { background: white; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; transition: all 0.3s; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
-    .pretty-product-card:hover { transform: translateY(-4px); box-shadow: 0 8px 24px rgba(0,0,0,0.12); }
-    .pretty-product-image { width: 100%; height: 200px; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); object-fit: cover; }
-    .pretty-product-info { padding: 20px; }
-    .pretty-product-name { font-size: 18px; font-weight: 600; color: #2d3748; margin-bottom: 8px; }
-    .pretty-product-category { display: inline-block; background: #edf2f7; color: #667eea; padding: 4px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; margin-bottom: 10px; }
-    .pretty-product-price { font-size: 20px; font-weight: 700; color: #667eea; margin: 10px 0; }
-    .pretty-product-desc { color: #718096; font-size: 14px; line-height: 1.6; margin-top: 10px; }
-    .view-toggle { text-align: center; margin: 20px 0; }
-    .view-toggle button { background: #e2e8f0; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; margin: 0 5px; }
-    .view-toggle button.active { background: #667eea; color: white; }
-  </style>
-</head>
-<body>
-  <h1>Vendor Onboarding Agent Demo</h1>
-  
-  <div>
-    <input type="text" id="vendorUrl" placeholder="Enter vendor URL">
-    <button onclick="runAgent()">Run Agent</button>
-    <button onclick="showPrettyView()" id="prettyBtn" style="display: none; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-weight: 600;">View Pretty Profile</button>
-  </div>
-
-  <div class="vendor">
-    <h2>Vendor Info</h2>
-    <p><strong>Name:</strong> <span id="vendorName"></span></p>
-    <p><strong>Logo URL:</strong> <span id="vendorLogo"></span></p>
-    <p><strong>Description:</strong> <span id="vendorDesc"></span></p>
-    <p><strong>Location:</strong> <span id="vendorLocation"></span></p>
-    <p><strong>Contact Emails:</strong> <span id="vendorEmails"></span></p>
-    <p><strong>Contact Phones:</strong> <span id="vendorPhones"></span></p>
-    <p><strong>Social Links:</strong> <span id="vendorSocial"></span></p>
-  </div>
-
-  <div class="products">
-    <h2>Products</h2>
-    <div id="productsContainer"></div>
-  </div>
-
-  <div class="logs">
-    <h2>Logs / State</h2>
-    <pre id="logsOutput"></pre>
-  </div>
-
-  <div class="view-toggle" id="viewToggle" style="display: none;">
-    <button onclick="showDefaultView()" class="active" id="defaultViewBtn">Default View</button>
-    <button onclick="showPrettyView()" id="prettyViewBtn">Pretty View</button>
-  </div>
-
-  <!-- Pretty View Container -->
-  <div class="pretty-container" id="prettyContainer">
-    <div class="pretty-header">
-      <img id="prettyLogo" class="pretty-logo" src="" alt="Logo" onerror="this.style.display='none'">
-      <div class="pretty-header-info">
-        <h1 id="prettyName">Vendor Name</h1>
-        <div class="location">
-          <span>📍</span>
-          <span id="prettyLocation">Location</span>
-        </div>
-      </div>
-    </div>
-    <div class="pretty-content">
-      <div class="pretty-section">
-        <h2>About</h2>
-        <p class="pretty-description" id="prettyDescription">Description will appear here</p>
-      </div>
-      
-      <div class="pretty-section">
-        <h2>Contact Information</h2>
-        <div class="pretty-contact">
-          <div class="pretty-contact-item" id="prettyEmails">
-            <strong>Email</strong>
-            <span>No emails available</span>
-          </div>
-          <div class="pretty-contact-item" id="prettyPhones">
-            <strong>Phone</strong>
-            <span>No phones available</span>
-          </div>
-        </div>
-        <div style="margin-top: 20px;">
-          <strong style="color: #2d3748; display: block; margin-bottom: 10px;">Social Links</strong>
-          <div class="pretty-social" id="prettySocial"></div>
-        </div>
-      </div>
-      
-      <div class="pretty-section">
-        <h2>Products</h2>
-        <div class="pretty-products" id="prettyProducts"></div>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    async function runAgent() {
-      const url = document.getElementById('vendorUrl').value;
-      if (!url) {
-        alert("Enter a vendor URL");
-        return;
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      max-width: 1200px;
+      margin: 40px auto;
+      padding: 20px;
+      background: #f5f7fa;
+    }
+    .container {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 30px;
+      align-items: start;
+    }
+    @media (max-width: 768px) {
+      .container {
+        grid-template-columns: 1fr;
       }
-
-      // Clear previous output
-      document.getElementById('vendorName').textContent = '';
-      document.getElementById('vendorLogo').textContent = '';
-      document.getElementById('vendorDesc').textContent = '';
-      document.getElementById('vendorLocation').textContent = '';
-      document.getElementById('vendorEmails').textContent = '';
-      document.getElementById('vendorPhones').textContent = '';
-      document.getElementById('vendorSocial').textContent = '';
-      document.getElementById('productsContainer').innerHTML = '';
-      document.getElementById('logsOutput').textContent = 'Running agent...';
-
-      try {
-        const response = await fetch('http://127.0.0.1:5000/run-agent', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ vendor_url: url })
-        });
+    }
+    h2 {
+      color: #2d3748;
+      margin-bottom: 30px;
+    }
+    form {
+      background: white;
+      padding: 30px;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    label {
+      display: block;
+      margin-bottom: 20px;
+      color: #4a5568;
+      font-weight: 500;
+    }
+    input[type="text"],
+    input[type="number"],
+    select {
+      width: 100%;
+      padding: 12px;
+      margin-top: 8px;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 14px;
+      box-sizing: border-box;
+      transition: border-color 0.2s;
+    }
+    input[type="text"]:focus,
+    input[type="number"]:focus,
+    select:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    /* Custom Date Picker Styles */
+    .date-picker-wrapper {
+      position: relative;
+      width: 100%;
+    }
+    .date-input {
+      width: 100%;
+      padding: 12px;
+      margin-top: 8px;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 14px;
+      box-sizing: border-box;
+      transition: border-color 0.2s;
+      cursor: pointer;
+      background: white;
+    }
+    .date-input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    .date-picker-popup {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      margin-top: 4px;
+      background: white;
+      border: 2px solid #e2e8f0;
+      border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+      z-index: 1000;
+      padding: 20px;
+      min-width: 300px;
+      display: none;
+    }
+    .date-picker-popup.show {
+      display: block;
+    }
+    .date-picker-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .date-picker-nav {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    .date-picker-nav button {
+      background: #f7fafc;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 16px;
+      color: #4a5568;
+      transition: all 0.2s;
+    }
+    .date-picker-nav button:hover {
+      background: #edf2f7;
+    }
+    .date-picker-month-year {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .date-picker-month-year select {
+      padding: 6px 10px;
+      border: 2px solid #e2e8f0;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+      background: white;
+      margin: 0;
+      width: auto;
+      min-width: 100px;
+    }
+    .date-picker-month-year select:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    .date-picker-calendar {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 4px;
+    }
+    .date-picker-weekday {
+      text-align: center;
+      font-weight: 600;
+      color: #718096;
+      font-size: 12px;
+      padding: 8px 4px;
+    }
+    .date-picker-day {
+      text-align: center;
+      padding: 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.2s;
+      border: 1px solid transparent;
+    }
+    .date-picker-day:hover {
+      background: #edf2f7;
+    }
+    .date-picker-day.other-month {
+      color: #cbd5e0;
+    }
+    .date-picker-day.today {
+      background: #e6fffa;
+      color: #667eea;
+      font-weight: 600;
+    }
+    .date-picker-day.selected {
+      background: #667eea;
+      color: white;
+      font-weight: 600;
+    }
+    .date-picker-day.selected:hover {
+      background: #5568d3;
+    }
+    button[type="submit"] {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      padding: 14px 28px;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+      margin-top: 10px;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    button[type="submit"]:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    }
+    button[type="submit"]:active {
+      transform: translateY(0);
+    }
+    .note {
+      margin-top: 20px;
+      padding: 15px;
+      background: #edf2f7;
+      border-radius: 8px;
+      color: #4a5568;
+      font-size: 14px;
+    }
+    .process-card {
+      background: white;
+      padding: 30px;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    .process-card h3 {
+      color: #2d3748;
+      margin-bottom: 24px;
+      font-size: 20px;
+    }
+    .process-step {
+      display: flex;
+      align-items: flex-start;
+      margin-bottom: 20px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .process-step:last-child {
+      border-bottom: none;
+      margin-bottom: 0;
+      padding-bottom: 0;
+    }
+    .step-number {
+      flex-shrink: 0;
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 14px;
+      margin-right: 16px;
+    }
+    .step-content {
+      flex: 1;
+    }
+    .step-title {
+      color: #2d3748;
+      font-weight: 600;
+      margin-bottom: 4px;
+      font-size: 15px;
+    }
+    .step-description {
+      color: #718096;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .monitoring-section {
+      margin-top: 40px;
+      background: white;
+      padding: 30px;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    .monitoring-section h3 {
+      color: #2d3748;
+      margin-bottom: 20px;
+      font-size: 20px;
+    }
+    .monitoring-tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 20px;
+      border-bottom: 2px solid #e2e8f0;
+    }
+    .monitoring-tab {
+      padding: 12px 20px;
+      background: none;
+      border: none;
+      border-bottom: 3px solid transparent;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      color: #718096;
+      transition: all 0.2s;
+    }
+    .monitoring-tab:hover {
+      color: #667eea;
+    }
+    .monitoring-tab.active {
+      color: #667eea;
+      border-bottom-color: #667eea;
+    }
+    .monitoring-content {
+      display: none;
+    }
+    .monitoring-content.active {
+      display: block;
+    }
+    .log-container {
+      background: #1a202c;
+      border-radius: 8px;
+      padding: 20px;
+      max-height: 500px;
+      overflow-y: auto;
+      font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .log-entry {
+      margin-bottom: 8px;
+      padding: 8px;
+      border-radius: 4px;
+      word-wrap: break-word;
+    }
+    .log-entry.info {
+      color: #90cdf4;
+    }
+    .log-entry.success {
+      color: #68d391;
+    }
+    .log-entry.error {
+      color: #fc8181;
+    }
+    .log-entry.warning {
+      color: #fbbf24;
+    }
+    .log-entry.system {
+      color: #a0aec0;
+    }
+    .log-timestamp {
+      color: #718096;
+      margin-right: 8px;
+    }
+    .status-display {
+      background: #f7fafc;
+      border-radius: 8px;
+      padding: 20px;
+    }
+    .status-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 12px 0;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .status-item:last-child {
+      border-bottom: none;
+    }
+    .status-label {
+      font-weight: 500;
+      color: #4a5568;
+    }
+    .status-value {
+      color: #2d3748;
+      font-family: monospace;
+    }
+    .status-value.running {
+      color: #667eea;
+    }
+    .status-value.finished {
+      color: #68d391;
+    }
+    .status-value.error {
+      color: #fc8181;
+    }
+    .messages-list {
+      max-height: 500px;
+      overflow-y: auto;
+    }
+    .message-item {
+      background: #f7fafc;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 12px;
+      border-left: 4px solid #667eea;
+    }
+    .message-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .message-type {
+      font-weight: 600;
+      color: #667eea;
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+    .message-time {
+      color: #718096;
+      font-size: 12px;
+    }
+    .message-content {
+      color: #2d3748;
+      white-space: pre-wrap;
+      font-family: monospace;
+      font-size: 13px;
+    }
+    .vnc-container {
+      background: #1a202c;
+      border-radius: 8px;
+      padding: 20px;
+      min-height: 400px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #a0aec0;
+    }
+    .vnc-placeholder {
+      text-align: center;
+    }
+    .vnc-placeholder h4 {
+      margin-bottom: 12px;
+      color: #cbd5e0;
+    }
+    .polling-indicator {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      background: #68d391;
+      border-radius: 50%;
+      margin-left: 8px;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .polling-indicator.stopped {
+      background: #fc8181;
+      animation: none;
+    }
+  </style>
+  <script>
+    // Custom Date Picker Implementation
+    document.addEventListener('DOMContentLoaded', function() {
+      const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
+                         'July', 'August', 'September', 'October', 'November', 'December'];
+      const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      
+      function formatDate(date) {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      }
+      
+      function formatDisplayDate(date) {
+        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      }
+      
+      function createDatePicker(input, hiddenInput, popup, defaultDate = null) {
+        let currentDate = defaultDate ? new Date(defaultDate) : new Date();
+        let selectedDate = defaultDate ? new Date(defaultDate) : null;
+        let isOpen = false;
         
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-          throw new Error(errorData.error || `HTTP ${response.status}`);
+        // Set initial display and hidden values if default date is provided
+        if (defaultDate && selectedDate) {
+          input.value = formatDisplayDate(selectedDate);
+          hiddenInput.value = formatDate(selectedDate);
         }
         
-        const data = await response.json();
-
-        // Vendor Info
-        const v = data.vendor || {};
-        document.getElementById('vendorName').textContent = v.name || '';
-        document.getElementById('vendorLogo').textContent = v.logo || '';
-        document.getElementById('vendorDesc').textContent = v.description || '';
-        document.getElementById('vendorLocation').textContent = v.location || '';
-        document.getElementById('vendorEmails').textContent = (v.contact && v.contact.emails) ? v.contact.emails.join(", ") : '';
-        document.getElementById('vendorPhones').textContent = (v.contact && v.contact.phones) ? v.contact.phones.join(", ") : '';
-        document.getElementById('vendorSocial').textContent = v.social_links ? v.social_links.join(", ") : '';
-
-        // Products
-        const productsContainer = document.getElementById('productsContainer');
-        productsContainer.innerHTML = '';
-        if (data.products && Array.isArray(data.products)) {
-          data.products.forEach(p => {
-            const div = document.createElement('div');
-            div.className = 'product';
-            div.innerHTML = `<strong>${p.name || 'Unnamed'}</strong><br>
-                             Category: ${p.category || 'N/A'}<br>
-                             Price: ${p.price || 'N/A'}<br>
-                             Description: ${p.description || 'N/A'}<br>
-                             Image: ${p.image || 'N/A'}`;
-            productsContainer.appendChild(div);
+        function renderCalendar() {
+          const year = currentDate.getFullYear();
+          const month = currentDate.getMonth();
+          const firstDay = new Date(year, month, 1);
+          const lastDay = new Date(year, month + 1, 0);
+          const startDate = new Date(firstDay);
+          startDate.setDate(startDate.getDate() - startDate.getDay());
+          
+          let html = '<div class="date-picker-header">';
+          html += '<div class="date-picker-nav">';
+          html += '<button class="prev-month-btn">&lt;</button>';
+          html += '<div class="date-picker-month-year">';
+          html += `<select class="month-select">`;
+          for (let i = 0; i < 12; i++) {
+            html += `<option value="${i}" ${i === month ? 'selected' : ''}>${monthNames[i]}</option>`;
+          }
+          html += '</select>';
+          html += `<select class="year-select">`;
+          for (let y = year - 10; y <= year + 10; y++) {
+            html += `<option value="${y}" ${y === year ? 'selected' : ''}>${y}</option>`;
+          }
+          html += '</select>';
+          html += '</div>';
+          html += '<button class="next-month-btn">&gt;</button>';
+          html += '</div></div>';
+          
+          html += '<div class="date-picker-calendar">';
+          weekdays.forEach(day => {
+            html += `<div class="date-picker-weekday">${day}</div>`;
+          });
+          
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          
+          let date = new Date(startDate);
+          for (let i = 0; i < 42; i++) {
+            const dateStr = formatDate(date);
+            const isOtherMonth = date.getMonth() !== month;
+            const isToday = dateStr === formatDate(today);
+            const isSelected = selectedDate && dateStr === formatDate(selectedDate);
+            
+            let classes = 'date-picker-day';
+            if (isOtherMonth) classes += ' other-month';
+            if (isToday) classes += ' today';
+            if (isSelected) classes += ' selected';
+            
+            html += `<div class="${classes}" data-date="${dateStr}">${date.getDate()}</div>`;
+            date.setDate(date.getDate() + 1);
+          }
+          
+          html += '</div>';
+          popup.innerHTML = html;
+          
+          // Add event listeners for navigation
+          popup.querySelector('.prev-month-btn').addEventListener('click', function(e) {
+            e.stopPropagation();
+            currentDate.setMonth(currentDate.getMonth() - 1);
+            renderCalendar();
+          });
+          
+          popup.querySelector('.next-month-btn').addEventListener('click', function(e) {
+            e.stopPropagation();
+            currentDate.setMonth(currentDate.getMonth() + 1);
+            renderCalendar();
+          });
+          
+          popup.querySelector('.month-select').addEventListener('change', function(e) {
+            e.stopPropagation();
+            currentDate.setMonth(parseInt(this.value));
+            renderCalendar();
+          });
+          
+          popup.querySelector('.year-select').addEventListener('change', function(e) {
+            e.stopPropagation();
+            currentDate.setFullYear(parseInt(this.value));
+            renderCalendar();
+          });
+          
+          // Add event listeners for date selection
+          popup.querySelectorAll('.date-picker-day').forEach(day => {
+            day.addEventListener('click', function(e) {
+              e.stopPropagation();
+              const dateStr = this.getAttribute('data-date');
+              const [y, m, d] = dateStr.split('-').map(Number);
+              selectedDate = new Date(y, m - 1, d);
+              input.value = formatDisplayDate(selectedDate);
+              hiddenInput.value = formatDate(selectedDate);
+              popup.classList.remove('show');
+              isOpen = false;
+            });
           });
         }
-
-        // Logs
-        document.getElementById('logsOutput').textContent = JSON.stringify(data.state_log || data, null, 2);
-
-        // Show pretty button and view toggle
-        document.getElementById('prettyBtn').style.display = 'inline-block';
-        document.getElementById('viewToggle').style.display = 'block';
         
-        // Store data for pretty view
-        window.vendorData = data;
-
-      } catch (err) {
-        document.getElementById('logsOutput').textContent = 'Error: ' + err;
+        // Toggle picker
+        input.addEventListener('click', function(e) {
+          e.preventDefault();
+          if (!isOpen) {
+            // Close other pickers
+            document.querySelectorAll('.date-picker-popup.show').forEach(p => {
+              p.classList.remove('show');
+            });
+            popup.classList.add('show');
+            isOpen = true;
+            renderCalendar();
+          } else {
+            popup.classList.remove('show');
+            isOpen = false;
+          }
+        });
+        
+        // Close on outside click
+        document.addEventListener('click', function(e) {
+          if (!popup.contains(e.target) && e.target !== input) {
+            popup.classList.remove('show');
+            isOpen = false;
+          }
+        });
       }
-    }
-
-    function showDefaultView() {
-      document.querySelector('.vendor').style.display = 'block';
-      document.querySelector('.products').style.display = 'block';
-      document.querySelector('.logs').style.display = 'block';
-      document.getElementById('prettyContainer').style.display = 'none';
-      document.getElementById('defaultViewBtn').classList.add('active');
-      document.getElementById('prettyViewBtn').classList.remove('active');
-    }
-
-    function showPrettyView() {
-      if (!window.vendorData) {
-        alert("Please run the agent first to load data");
-        return;
-      }
-
-      const data = window.vendorData;
-      const v = data.vendor;
-
-      // Hide default view, show pretty view
-      document.querySelector('.vendor').style.display = 'none';
-      document.querySelector('.products').style.display = 'none';
-      document.querySelector('.logs').style.display = 'none';
-      document.getElementById('prettyContainer').style.display = 'block';
-      document.getElementById('prettyViewBtn').classList.add('active');
-      document.getElementById('defaultViewBtn').classList.remove('active');
-
-      // Populate pretty view
-      document.getElementById('prettyName').textContent = v.name || 'Unknown Vendor';
-      document.getElementById('prettyLocation').textContent = v.location || 'Location not specified';
       
-      // Logo
-      const logoImg = document.getElementById('prettyLogo');
-      if (v.logo) {
-        logoImg.src = v.logo;
-        logoImg.style.display = 'block';
-      } else {
-        logoImg.style.display = 'none';
+      // Initialize date pickers
+      const departInput = document.querySelector('input[name="depart_date"]');
+      const departHidden = document.querySelector('input[name="depart_date_value"]');
+      const departPopup = document.getElementById('departDatePicker');
+      if (departInput && departPopup) {
+        // Set default date to July 19, 2024
+        const defaultDepartDate = new Date(2024, 6, 19); // Month is 0-indexed, so 6 = July
+        createDatePicker(departInput, departHidden, departPopup, defaultDepartDate);
+      }
+      
+      const returnInput = document.querySelector('input[name="return_date"]');
+      const returnHidden = document.querySelector('input[name="return_date_value"]');
+      const returnPopup = document.getElementById('returnDatePicker');
+      if (returnInput && returnPopup) {
+        createDatePicker(returnInput, returnHidden, returnPopup);
+      }
+      
+      // Update form submission to use hidden inputs
+      document.querySelector('form').addEventListener('submit', function(e) {
+        const departHidden = document.querySelector('input[name="depart_date_value"]');
+        const returnHidden = document.querySelector('input[name="return_date_value"]');
+        
+        if (departHidden && departHidden.value) {
+          // Create a hidden input with the correct name for the form
+          const hidden = document.createElement('input');
+          hidden.type = 'hidden';
+          hidden.name = 'depart_date';
+          hidden.value = departHidden.value;
+          this.appendChild(hidden);
+        }
+        
+        if (returnHidden && returnHidden.value) {
+          const hidden = document.createElement('input');
+          hidden.type = 'hidden';
+          hidden.name = 'return_date';
+          hidden.value = returnHidden.value;
+          this.appendChild(hidden);
+        }
+      });
+
+      // Live Monitoring
+      let currentSessionId = null;
+      let pollingInterval = null;
+      let eventSource = null;
+      let isPolling = false;
+
+      // Tab switching
+      const tabs = document.querySelectorAll('.monitoring-tab');
+      const contents = document.querySelectorAll('.monitoring-content');
+      
+      tabs.forEach(tab => {
+        tab.addEventListener('click', function() {
+          const targetId = this.getAttribute('data-tab');
+          
+          tabs.forEach(t => t.classList.remove('active'));
+          contents.forEach(c => c.classList.remove('active'));
+          
+          this.classList.add('active');
+          document.getElementById(targetId).classList.add('active');
+        });
+      });
+
+      // Add log entry
+      function addLogEntry(message, type = 'info') {
+        const logContainer = document.getElementById('logContainer');
+        if (!logContainer) return;
+        
+        const entry = document.createElement('div');
+        entry.className = `log-entry ${type}`;
+        
+        const timestamp = new Date().toLocaleTimeString();
+        entry.innerHTML = `<span class="log-timestamp">[${timestamp}]</span>${message}`;
+        
+        logContainer.appendChild(entry);
+        logContainer.scrollTop = logContainer.scrollHeight;
       }
 
-      // Description
-      document.getElementById('prettyDescription').textContent = v.description || 'No description available.';
-
-      // Contact info
-      const emailsDiv = document.getElementById('prettyEmails');
-      if (v.contact.emails && v.contact.emails.length > 0) {
-        emailsDiv.innerHTML = `<strong>Email</strong><span>${v.contact.emails.map(e => `<a href="mailto:${e}" style="color: #667eea; text-decoration: none;">${e}</a>`).join('<br>')}</span>`;
-      } else {
-        emailsDiv.innerHTML = '<strong>Email</strong><span style="color: #a0aec0;">No emails available</span>';
-      }
-
-      const phonesDiv = document.getElementById('prettyPhones');
-      if (v.contact.phones && v.contact.phones.length > 0) {
-        phonesDiv.innerHTML = `<strong>Phone</strong><span>${v.contact.phones.join('<br>')}</span>`;
-      } else {
-        phonesDiv.innerHTML = '<strong>Phone</strong><span style="color: #a0aec0;">No phones available</span>';
-      }
-
-      // Social links
-      const socialDiv = document.getElementById('prettySocial');
-      if (v.social_links && v.social_links.length > 0) {
-        socialDiv.innerHTML = v.social_links.map(link => 
-          `<a href="${link}" target="_blank">${link}</a>`
-        ).join('');
-      } else {
-        socialDiv.innerHTML = '<span style="color: #a0aec0;">No social links available</span>';
-      }
-
-      // Products
-      const productsDiv = document.getElementById('prettyProducts');
-      if (data.products && data.products.length > 0) {
-        productsDiv.innerHTML = data.products.map(p => `
-          <div class="pretty-product-card">
-            ${p.image ? `<img src="${p.image}" class="pretty-product-image" alt="${p.name}" onerror="this.style.display='none'">` : ''}
-            <div class="pretty-product-info">
-              <div class="pretty-product-name">${p.name || 'Unnamed Product'}</div>
-              ${p.category ? `<span class="pretty-product-category">${p.category}</span>` : ''}
-              ${p.price ? `<div class="pretty-product-price">${p.price}</div>` : ''}
-              ${p.description ? `<div class="pretty-product-desc">${p.description}</div>` : ''}
-            </div>
+      // Update status display
+      function updateStatus(data) {
+        const statusContainer = document.getElementById('statusContainer');
+        if (!statusContainer || !data) return;
+        
+        statusContainer.innerHTML = `
+          <div class="status-item">
+            <span class="status-label">Status:</span>
+            <span class="status-value ${data.status || 'unknown'}">${data.status || 'Unknown'}</span>
           </div>
-        `).join('');
-      } else {
-        productsDiv.innerHTML = '<p style="color: #a0aec0; text-align: center; padding: 40px;">No products found</p>';
+          <div class="status-item">
+            <span class="status-label">Session ID:</span>
+            <span class="status-value">${data.session_id || 'N/A'}</span>
+          </div>
+          <div class="status-item">
+            <span class="status-label">Agent:</span>
+            <span class="status-value">${data.agent_name || 'N/A'}</span>
+          </div>
+          <div class="status-item">
+            <span class="status-label">Last Updated:</span>
+            <span class="status-value">${new Date().toLocaleTimeString()}</span>
+          </div>
+        `;
       }
-    }
+
+      // Update messages display
+      function updateMessages(messages) {
+        const messagesContainer = document.getElementById('messagesContainer');
+        if (!messagesContainer) return;
+        
+        if (!messages || messages.length === 0) {
+          messagesContainer.innerHTML = '<p style="color: #718096; text-align: center; padding: 20px;">No messages yet</p>';
+          return;
+        }
+        
+        messagesContainer.innerHTML = messages.map(msg => {
+          const time = new Date(msg.timestamp || Date.now()).toLocaleTimeString();
+          return `
+            <div class="message-item">
+              <div class="message-header">
+                <span class="message-type">${msg.type || 'MESSAGE'}</span>
+                <span class="message-time">${time}</span>
+              </div>
+              <div class="message-content">${JSON.stringify(msg.content || msg, null, 2)}</div>
+            </div>
+          `;
+        }).join('');
+      }
+
+      // Poll for status and messages
+      async function pollStatus() {
+        if (!currentSessionId || !isPolling) return;
+        
+        try {
+          // Poll status
+          const statusRes = await fetch(`/api/session/${currentSessionId}/status`);
+          if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            updateStatus(statusData);
+            addLogEntry(`Status: ${statusData.status}`, 'system');
+            
+            // Stop polling if finished or error
+            if (statusData.status === 'finished' || statusData.status === 'error') {
+              stopPolling();
+              addLogEntry('Workflow completed', statusData.status === 'error' ? 'error' : 'success');
+            }
+          }
+          
+          // Poll messages
+          const messagesRes = await fetch(`/api/session/${currentSessionId}/messages`);
+          if (messagesRes.ok) {
+            const messagesData = await messagesRes.json();
+            if (messagesData.messages) {
+              updateMessages(messagesData.messages);
+              // Log new messages
+              messagesData.messages.slice(-3).forEach(msg => {
+                if (msg.type === 'DONE') {
+                  addLogEntry(`Task completed: ${JSON.stringify(msg.content)}`, 'success');
+                } else if (msg.type === 'ERROR') {
+                  addLogEntry(`Error: ${JSON.stringify(msg.content)}`, 'error');
+                }
+              });
+            }
+          }
+        } catch (error) {
+          addLogEntry(`Polling error: ${error.message}`, 'error');
+        }
+      }
+
+      function startPolling(sessionId) {
+        if (isPolling) return;
+        
+        currentSessionId = sessionId;
+        isPolling = true;
+        
+        const indicator = document.querySelector('.polling-indicator');
+        if (indicator) {
+          indicator.classList.remove('stopped');
+        }
+        
+        addLogEntry(`Starting monitoring for session: ${sessionId}`, 'info');
+        
+        // Try SSE streaming first
+        try {
+          eventSource = new EventSource(`/api/session/${sessionId}/events`);
+          
+          eventSource.onmessage = function(event) {
+            try {
+              const data = JSON.parse(event.data);
+              if (data.type === 'DONE') {
+                addLogEntry(`Task completed: ${JSON.stringify(data.content)}`, 'success');
+              } else if (data.type === 'ERROR') {
+                addLogEntry(`Error: ${JSON.stringify(data.content)}`, 'error');
+              } else {
+                addLogEntry(`Event: ${JSON.stringify(data)}`, 'info');
+              }
+              
+              // Update messages if it's a message event
+              if (data.type) {
+                pollStatus(); // Refresh status and messages
+              }
+            } catch (e) {
+              addLogEntry(`Event: ${event.data}`, 'info');
+            }
+          };
+          
+          eventSource.onerror = function(error) {
+            addLogEntry('SSE connection error, falling back to polling', 'warning');
+            eventSource.close();
+            eventSource = null;
+            // Fall back to polling
+            pollStatus();
+            pollingInterval = setInterval(pollStatus, 2000);
+          };
+        } catch (e) {
+          addLogEntry('SSE not supported, using polling', 'info');
+          // Fall back to polling
+          pollStatus();
+          pollingInterval = setInterval(pollStatus, 2000);
+        }
+        
+        // Also start polling for status
+        pollStatus();
+        if (!pollingInterval) {
+          pollingInterval = setInterval(pollStatus, 2000);
+        }
+      }
+
+      function stopPolling() {
+        isPolling = false;
+        if (pollingInterval) {
+          clearInterval(pollingInterval);
+          pollingInterval = null;
+        }
+        if (eventSource) {
+          eventSource.close();
+          eventSource = null;
+        }
+        
+        const indicator = document.querySelector('.polling-indicator');
+        if (indicator) {
+          indicator.classList.add('stopped');
+        }
+      }
+
+      // Intercept form submission to start monitoring
+      const form = document.querySelector('form');
+      const originalSubmit = form.onsubmit;
+      
+      form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        
+        // Show monitoring section
+        const monitoringSection = document.querySelector('.monitoring-section');
+        monitoringSection.style.display = 'block';
+        document.querySelector('.monitoring-tab[data-tab="logs"]').click();
+        
+        addLogEntry('Starting workflow...', 'info');
+        
+        // Submit form data
+        const formData = new FormData(form);
+        
+        try {
+          const response = await fetch('/start', {
+            method: 'POST',
+            body: formData
+          });
+          
+          const result = await response.json();
+          addLogEntry('Workflow submitted successfully', 'success');
+          
+          // Try to extract session_id from response
+          // The workflow might have multiple sessions, so we'll need to handle that
+          if (result.session_id) {
+            startPolling(result.session_id);
+            addLogEntry(`Monitoring session: ${result.session_id}`, 'info');
+            updateVNCEndpoint(result.session_id);
+          } else if (result.sessions && result.sessions.length > 0) {
+            // If multiple sessions, monitor the first one
+            startPolling(result.sessions[0]);
+            addLogEntry(`Monitoring session: ${result.sessions[0]}`, 'info');
+            updateVNCEndpoint(result.sessions[0]);
+          } else {
+            // Manual session ID entry
+            addLogEntry('No session ID in response. Enter session ID manually to monitor.', 'warning');
+            const sessionId = prompt('Enter AGI session ID to monitor (or leave empty to skip):');
+            if (sessionId) {
+              startPolling(sessionId);
+              updateVNCEndpoint(sessionId);
+            }
+          }
+        } catch (error) {
+          addLogEntry(`Error starting workflow: ${error.message}`, 'error');
+        }
+      });
+
+      // VNC helper functions
+      function updateVNCEndpoint(sessionId) {
+        const vncEndpoint = document.getElementById('vncEndpoint');
+        if (vncEndpoint && sessionId) {
+          // VNC endpoint would typically be provided by the AGI API
+          // For now, we'll construct a placeholder
+          vncEndpoint.textContent = `vnc://api.agi.tech/sessions/${sessionId}/vnc`;
+        }
+      }
+
+      function connectVNC() {
+        const endpoint = document.getElementById('vncEndpoint').textContent;
+        if (endpoint && endpoint !== 'Not available') {
+          addLogEntry(`VNC endpoint: ${endpoint}`, 'info');
+          addLogEntry('Use a VNC client to connect to the endpoint above', 'info');
+          // In a real implementation, you might open a VNC viewer or embed one
+          window.open(`https://novnc.com/noVNC/vnc.html?host=${encodeURIComponent(endpoint)}`, '_blank');
+        } else {
+          alert('VNC endpoint not available. Session may not be active yet.');
+        }
+      }
+    });
   </script>
+</head>
+<body>
+  <h2>Fly someone out — quick workflow</h2>
+  <div class="container">
+    <form method=post action="/start">
+      <label>
+        From (city or airport code):
+        <input type="text" name="from_location" placeholder="e.g. SFO, NYC" required>
+      </label>
+   
+      <label>
+        Depart date:
+        <div class="date-picker-wrapper">
+          <input type="text" class="date-input" name="depart_date" placeholder="Select date" readonly required>
+          <input type="hidden" name="depart_date_value">
+          <div class="date-picker-popup" id="departDatePicker"></div>
+        </div>
+      </label>
+
+      <label>
+        Eating preference:
+        <select name="eat_mode">
+          <option value="in">Eat in (order food)</option>
+          <option value="out">Eat out (book restaurant)</option>
+        </select>
+      </label>
+     
+      <label>
+        Number of travelers:
+        <input type="number" name="num_travelers" min="1" value="1" required>
+      </label>
+      <button type="submit">Start Fly-Out Workflow</button>
+    </form>
+
+    <div class="process-card">
+      <h3>6-Step Process</h3>
+      <div class="process-step">
+        <div class="step-number">1</div>
+        <div class="step-content">
+          <div class="step-title">Book Flight</div>
+          <div class="step-description">Purchase airline tickets from the origin location to your destination</div>
+        </div>
+      </div>
+      <div class="process-step">
+        <div class="step-number">2</div>
+        <div class="step-content">
+          <div class="step-title">Order Transportation</div>
+          <div class="step-description">Schedule an Uber ride from the airport, timed to arrive shortly after landing</div>
+        </div>
+      </div>
+      <div class="process-step">
+        <div class="step-number">3</div>
+        <div class="step-content">
+          <div class="step-title">Book Lodging</div>
+          <div class="step-description">Reserve accommodation for the duration of the stay</div>
+        </div>
+      </div>
+      <div class="process-step">
+        <div class="step-number">4</div>
+        <div class="step-content">
+          <div class="step-title">Arrange Dining</div>
+          <div class="step-description">Order food delivery or make restaurant reservations based on your preference</div>
+        </div>
+      </div>
+      <div class="process-step">
+        <div class="step-number">5</div>
+        <div class="step-content">
+          <div class="step-title">Schedule Calendar Events</div>
+          <div class="step-description">Add important dates and activities to the calendar</div>
+        </div>
+      </div>
+      <div class="process-step">
+        <div class="step-number">6</div>
+        <div class="step-content">
+          <div class="step-title">Send Notifications</div>
+          <div class="step-description">Generate and send confirmation messages via SMS and voice call</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="monitoring-section" style="display: none;">
+    <h3>Live Monitoring <span class="polling-indicator stopped"></span></h3>
+    
+    <div class="monitoring-tabs">
+      <button class="monitoring-tab active" data-tab="logs">Live Logs</button>
+      <button class="monitoring-tab" data-tab="status">Status</button>
+      <button class="monitoring-tab" data-tab="messages">Messages</button>
+      <button class="monitoring-tab" data-tab="vnc">Visual Monitor</button>
+    </div>
+    
+    <div id="logs" class="monitoring-content active">
+      <div id="logContainer" class="log-container">
+        <div class="log-entry info">Waiting for workflow to start...</div>
+      </div>
+    </div>
+    
+    <div id="status" class="monitoring-content">
+      <div id="statusContainer" class="status-display">
+        <p style="color: #718096; text-align: center; padding: 20px;">No status available yet</p>
+      </div>
+    </div>
+    
+    <div id="messages" class="monitoring-content">
+      <div id="messagesContainer" class="messages-list">
+        <p style="color: #718096; text-align: center; padding: 20px;">No messages yet</p>
+      </div>
+    </div>
+    
+    <div id="vnc" class="monitoring-content">
+      <div class="vnc-container">
+        <div class="vnc-placeholder">
+          <h4>VNC Visual Monitor</h4>
+          <p>Real-time screencast connection will appear here</p>
+          <p style="font-size: 12px; margin-top: 8px; color: #718096;">
+            VNC endpoint: <code id="vncEndpoint" style="color: #667eea;">Not available</code>
+          </p>
+          <p style="font-size: 11px; margin-top: 8px; color: #a0aec0;">
+            Connect using a VNC client when session is active. The endpoint will be displayed here.
+          </p>
+          <div style="margin-top: 16px;">
+            <button onclick="connectVNC()" style="padding: 8px 16px; background: #667eea; color: white; border: none; border-radius: 6px; cursor: pointer;">
+              Connect VNC Viewer
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </body>
 </html>
