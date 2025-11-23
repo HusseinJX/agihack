@@ -68,7 +68,7 @@ ENDPOINTS = {
 
 @app.route('/')
 def index():
-    return render_template_string(open('u2i.html').read())
+    return render_template_string(open('ui.html').read())
 
 
 @app.route('/start', methods=['POST'])
