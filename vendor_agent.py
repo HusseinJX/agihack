@@ -17,10 +17,12 @@ Important notes:
 How to run:
  1. python3 -m venv venv
  2. source venv/bin/activate
- 3. pip install flask requests python-dotenv
+ 3. pip install -r requirements.txt
  4. export AGI_API_KEY="your_agi_api_key"  # or use a .env file
- 5. python flyout_app.py
- 6. Open http://127.0.0.1:5000
+ 5. export SENTRY_DSN="your_sentry_dsn"  # optional, for error tracking
+ 6. export DAYTONA_API_KEY="your_daytona_key"  # optional, for isolated execution
+ 7. python vendor_agent.py
+ 8. Open http://127.0.0.1:5000
 
 """
 
@@ -31,6 +33,18 @@ import datetime
 import time
 import json
 from urllib.parse import urljoin
+
+# Sentry Integration
+import sentry_sdk
+from sentry_sdk.integrations.flask import FlaskIntegration
+
+# Initialize Sentry
+sentry_sdk.init(
+    dsn=os.getenv("SENTRY_DSN", ""),
+    integrations=[FlaskIntegration()],
+    traces_sample_rate=1.0,
+    environment=os.getenv("ENVIRONMENT", "development"),
+)
 
 app = Flask(__name__)
 
@@ -94,15 +108,36 @@ def start_workflow():
     print(f"Workflow payload: {workflow_payload}")
     # return jsonify(workflow_payload)
 
-    # Run the orchestration synchronously and return results as JSON.
+    # Run the orchestration via Daytona (or locally if Daytona not configured)
     # NOTE: for production, make these tasks asynchronous and add retries, idempotency keys, and secure payment handling.
     try:
-        result = run_flyout_workflow(workflow_payload)
+        # Use Daytona to run workflow in isolation
+        from daytona_runner import run_in_daytona
+        
+        sentry_sdk.add_breadcrumb(
+            category="workflow",
+            message="Starting fly-out workflow via Daytona",
+            level="info",
+            data=workflow_payload
+        )
+        
+        result = run_in_daytona(workflow_payload)
         print(f"Workflow completed. Result: {result}")
+        
+        sentry_sdk.add_breadcrumb(
+            category="workflow",
+            message="Workflow completed successfully",
+            level="info"
+        )
+        
         return jsonify(result)
     except Exception as e:
         error_msg = f"Workflow failed with exception: {str(e)}"
         print(f"EXCEPTION: {error_msg}")
+        
+        # Capture exception in Sentry
+        sentry_sdk.capture_exception(e)
+        
         import traceback
         traceback.print_exc()
         return jsonify({'error': error_msg, 'traceback': traceback.format_exc()}), 500
@@ -220,54 +255,139 @@ def run_flyout_workflow(p):
     state_log = []
 
     # 1) Buy flight using AGI
-    print("\n[Step 1/5] Using AGI agent to book flight...")
-    flight_resp = buy_flight_agi(p, state_log)
-    print(f"Flight result: {flight_resp}")
-    timeline.append({'step': 'buy_flight', 'result': flight_resp})
+    print("\n[Step 1/6] Using AGI agent to book flight...")
+    sentry_sdk.add_breadcrumb(
+        category="workflow",
+        message="Starting flight booking step",
+        level="info",
+        data={"from": p.get('from'), "to": p.get('to'), "date": p.get('depart_date')}
+    )
+    try:
+        flight_resp = buy_flight_agi(p, state_log)
+        print(f"Flight result: {flight_resp}")
+        timeline.append({'step': 'buy_flight', 'result': flight_resp})
+        sentry_sdk.add_breadcrumb(
+            category="workflow",
+            message="Flight booking completed",
+            level="info",
+            data={"success": flight_resp.get('success')}
+        )
+    except Exception as e:
+        sentry_sdk.capture_exception(e)
+        raise
 
 
 
     # 2) Order Uber using AGI (needs flight details for timing)
-    print("\n[Step 2/5] Using AGI agent to order Uber...")
-    # if flight_resp.get('success'):
-    #     uber_resp = order_uber_agi(p, flight_resp, state_log)
-    # else:
-    #     print("Skipping Uber order due to flight failure")
-    #     uber_resp = {'success': False, 'error': 'Skipped due to flight failure'}
-    # print(f"Uber result: {uber_resp}")
-    # timeline.append({'step': 'order_uber', 'result': uber_resp})
-
-    uber_resp = order_uber_agi(p, state_log)
-    print(f"Uber result: {uber_resp}")
-    timeline.append({'step': 'order_uber', 'result': uber_resp})
+    print("\n[Step 2/6] Using AGI agent to order Uber...")
+    sentry_sdk.add_breadcrumb(
+        category="workflow",
+        message="Starting Uber ordering step",
+        level="info"
+    )
+    try:
+        uber_resp = order_uber_agi(p, state_log)
+        print(f"Uber result: {uber_resp}")
+        timeline.append({'step': 'order_uber', 'result': uber_resp})
+        sentry_sdk.add_breadcrumb(
+            category="workflow",
+            message="Uber ordering completed",
+            level="info",
+            data={"success": uber_resp.get('success')}
+        )
+    except Exception as e:
+        sentry_sdk.capture_exception(e)
+        raise
 
 
 
     # 3) Book lodging using AGI
-    print("\n[Step 3/5] Using AGI agent to book lodging...")
-    lodging_resp = book_lodging_agi(p, state_log)
-    print(f"Lodging result: {lodging_resp}")
-    timeline.append({'step': 'book_lodging', 'result': lodging_resp})
+    print("\n[Step 3/6] Using AGI agent to book lodging...")
+    sentry_sdk.add_breadcrumb(
+        category="workflow",
+        message="Starting lodging booking step",
+        level="info",
+        data={"lodging": p.get('lodging')}
+    )
+    try:
+        lodging_resp = book_lodging_agi(p, state_log)
+        print(f"Lodging result: {lodging_resp}")
+        timeline.append({'step': 'book_lodging', 'result': lodging_resp})
+        sentry_sdk.add_breadcrumb(
+            category="workflow",
+            message="Lodging booking completed",
+            level="info",
+            data={"success": lodging_resp.get('success')}
+        )
+    except Exception as e:
+        sentry_sdk.capture_exception(e)
+        raise
 
 
     # 4) Book dining using AGI
-    print("\n[Step 4/5] Using AGI agent to book dining...")
-    dining_resp = book_dining_agi(p, state_log)
-    print(f"Dining result: {dining_resp}")
-    timeline.append({'step': 'book_dining', 'result': dining_resp})
+    print("\n[Step 4/6] Using AGI agent to book dining...")
+    sentry_sdk.add_breadcrumb(
+        category="workflow",
+        message="Starting dining booking step",
+        level="info",
+        data={"eat_mode": p.get('eat_mode')}
+    )
+    try:
+        dining_resp = book_dining_agi(p, state_log)
+        print(f"Dining result: {dining_resp}")
+        timeline.append({'step': 'book_dining', 'result': dining_resp})
+        sentry_sdk.add_breadcrumb(
+            category="workflow",
+            message="Dining booking completed",
+            level="info",
+            data={"success": dining_resp.get('success')}
+        )
+    except Exception as e:
+        sentry_sdk.capture_exception(e)
+        raise
 
 
     # 5) Book calendar using AGI
     print("\n[Step 5/6] Using AGI agent to book calendar...")
-    calendar_resp = book_calendar_agi(p, state_log)
-    print(f"Calendar result: {calendar_resp}")
-    timeline.append({'step': 'book_calendar', 'result': calendar_resp})
+    sentry_sdk.add_breadcrumb(
+        category="workflow",
+        message="Starting calendar booking step",
+        level="info"
+    )
+    try:
+        calendar_resp = book_calendar_agi(p, state_log)
+        print(f"Calendar result: {calendar_resp}")
+        timeline.append({'step': 'book_calendar', 'result': calendar_resp})
+        sentry_sdk.add_breadcrumb(
+            category="workflow",
+            message="Calendar booking completed",
+            level="info",
+            data={"success": calendar_resp.get('success')}
+        )
+    except Exception as e:
+        sentry_sdk.capture_exception(e)
+        raise
 
     # 6) Generate message with Minimax and send with Telnyx
     print("\n[Step 6/6] Generating greeting with Minimax and sending with Telnyx...")
-    message_resp = generate_and_send_message_minimax(p, state_log)
-    print(f"Message result: {message_resp}")
-    timeline.append({'step': 'send_message', 'result': message_resp})
+    sentry_sdk.add_breadcrumb(
+        category="workflow",
+        message="Starting message generation and sending step",
+        level="info"
+    )
+    try:
+        message_resp = generate_and_send_message_minimax(p, state_log)
+        print(f"Message result: {message_resp}")
+        timeline.append({'step': 'send_message', 'result': message_resp})
+        sentry_sdk.add_breadcrumb(
+            category="workflow",
+            message="Message generation and sending completed",
+            level="info",
+            data={"success": message_resp.get('success')}
+        )
+    except Exception as e:
+        sentry_sdk.capture_exception(e)
+        raise
 
     return {
         'success': True,
@@ -654,6 +774,11 @@ def generate_and_send_message_minimax(p, state_log):
     try:
         # Step 1: Generate greeting with Minimax
         print("  Generating greeting with Minimax...")
+        sentry_sdk.add_breadcrumb(
+            category="message",
+            message="Generating greeting with Minimax",
+            level="info"
+        )
         
         if not MINIMAX_API_KEY:
             print("  Warning: Minimax API key not configured, using fallback message")
@@ -694,9 +819,20 @@ def generate_and_send_message_minimax(p, state_log):
         
         print(f"  Generated message: {generated_message}")
         state_log.append({"step": "Generate Message (Minimax)", "success": True, "message": generated_message})
+        sentry_sdk.add_breadcrumb(
+            category="message",
+            message="Message generated successfully",
+            level="info",
+            data={"message_preview": generated_message[:50]}
+        )
         
         # Step 2: Send message via Telnyx
         print("  Sending message with Telnyx...")
+        sentry_sdk.add_breadcrumb(
+            category="message",
+            message="Sending SMS with Telnyx",
+            level="info"
+        )
         
         if not TELNYX_API_KEY or not TELNYX_PHONE_NUMBER:
             print("  Warning: Telnyx credentials not configured, skipping send")
@@ -728,6 +864,12 @@ def generate_and_send_message_minimax(p, state_log):
         
         print(f"  Message sent successfully: {telnyx_data.get('data', {}).get('id', 'N/A')}")
         state_log.append({"step": "Send Message (Telnyx)", "success": True, "message_id": telnyx_data.get('data', {}).get('id')})
+        sentry_sdk.add_breadcrumb(
+            category="message",
+            message="SMS sent successfully",
+            level="info",
+            data={"message_id": telnyx_data.get('data', {}).get('id')}
+        )
         
         return {
             'success': True,
@@ -742,6 +884,7 @@ def generate_and_send_message_minimax(p, state_log):
         error_msg = f"API request failed: {str(e)}"
         print(f"  ERROR: {error_msg}")
         state_log.append({"step": "Generate/Send Message", "success": False, "error": error_msg})
+        sentry_sdk.capture_exception(e)
         return {'success': False, 'error': error_msg, 'generated_message': generated_message if 'generated_message' in locals() else 'N/A'}
     except Exception as e:
         error_msg = f"Unexpected error: {str(e)}"
@@ -749,6 +892,7 @@ def generate_and_send_message_minimax(p, state_log):
         import traceback
         traceback.print_exc()
         state_log.append({"step": "Generate/Send Message", "success": False, "error": error_msg})
+        sentry_sdk.capture_exception(e)
         return {'success': False, 'error': error_msg}
 
 
