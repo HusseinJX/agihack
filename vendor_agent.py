@@ -258,10 +258,16 @@ def run_flyout_workflow(p):
 
 
     # 5) Book calendar using AGI
-    print("\n[Step 5/5] Using AGI agent to book calendar...")
+    print("\n[Step 5/6] Using AGI agent to book calendar...")
     calendar_resp = book_calendar_agi(p, state_log)
     print(f"Calendar result: {calendar_resp}")
     timeline.append({'step': 'book_calendar', 'result': calendar_resp})
+
+    # 6) Generate message with Minimax and send with Telnyx
+    print("\n[Step 6/6] Generating greeting with Minimax and sending with Telnyx...")
+    message_resp = generate_and_send_message_minimax(p, state_log)
+    print(f"Message result: {message_resp}")
+    timeline.append({'step': 'send_message', 'result': message_resp})
 
     return {
         'success': True,
@@ -624,6 +630,127 @@ def book_calendar_agi(p, state_log):
             cleanup_state = cleanup_agi_session(session_id)
             state_log.append({"step": "Cleanup Session (Calendar)", **cleanup_state})
     return data
+
+
+# Step 6: Generate a message with Minimax, and Send with Telnyx 
+def generate_and_send_message_minimax(p, state_log):
+    """Generate a unique greeting using Minimax AI and send it via Telnyx SMS.
+    
+    Args:
+        p: Workflow payload with traveler info
+        state_log: State log for tracking workflow steps
+    
+    Returns:
+        dict with success status and message details
+    """
+    # Configuration
+    MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY", "")
+    MINIMAX_API_URL = "https://api.minimax.chat/v1/text/chatcompletion_pro"
+    TELNYX_API_KEY = os.getenv("TELNYX_API_KEY", "")
+    TELNYX_API_URL = "https://api.telnyx.com/v2/messages"
+    TELNYX_PHONE_NUMBER = os.getenv("TELNYX_PHONE_NUMBER", "")
+    RECIPIENT_PHONE = os.getenv("RECIPIENT_PHONE", "6287345655")  # Belle Vue's phone
+    
+    try:
+        # Step 1: Generate greeting with Minimax
+        print("  Generating greeting with Minimax...")
+        
+        if not MINIMAX_API_KEY:
+            print("  Warning: Minimax API key not configured, using fallback message")
+            generated_message = "🌟 Hey Belle! Hope you're having an amazing day! Just wanted to reach out and say hello. Looking forward to connecting soon! ✨"
+        else:
+            minimax_payload = {
+                "model": "abab5.5-chat",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Generate a short, friendly, and unique greeting message (max 100 characters) for someone named Belle. Make it warm and personal."
+                    }
+                ],
+                "temperature": 0.8,
+                "max_tokens": 150
+            }
+            
+            minimax_headers = {
+                "Authorization": f"Bearer {MINIMAX_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            
+            minimax_resp = requests.post(
+                MINIMAX_API_URL,
+                headers=minimax_headers,
+                json=minimax_payload,
+                timeout=30
+            )
+            minimax_resp.raise_for_status()
+            minimax_data = minimax_resp.json()
+            
+            # Extract the generated message
+            generated_message = minimax_data.get('choices', [{}])[0].get('message', {}).get('content', '').strip()
+            
+            if not generated_message:
+                print("  Warning: Minimax returned empty message, using fallback")
+                generated_message = "🌟 Hey Belle! Hope you're having an amazing day! ✨"
+        
+        print(f"  Generated message: {generated_message}")
+        state_log.append({"step": "Generate Message (Minimax)", "success": True, "message": generated_message})
+        
+        # Step 2: Send message via Telnyx
+        print("  Sending message with Telnyx...")
+        
+        if not TELNYX_API_KEY or not TELNYX_PHONE_NUMBER:
+            print("  Warning: Telnyx credentials not configured, skipping send")
+            return {
+                'success': False,
+                'error': 'Telnyx credentials not configured',
+                'generated_message': generated_message
+            }
+        
+        telnyx_payload = {
+            "from": TELNYX_PHONE_NUMBER,
+            "to": RECIPIENT_PHONE,
+            "text": generated_message
+        }
+        
+        telnyx_headers = {
+            "Authorization": f"Bearer {TELNYX_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        telnyx_resp = requests.post(
+            TELNYX_API_URL,
+            headers=telnyx_headers,
+            json=telnyx_payload,
+            timeout=30
+        )
+        telnyx_resp.raise_for_status()
+        telnyx_data = telnyx_resp.json()
+        
+        print(f"  Message sent successfully: {telnyx_data.get('data', {}).get('id', 'N/A')}")
+        state_log.append({"step": "Send Message (Telnyx)", "success": True, "message_id": telnyx_data.get('data', {}).get('id')})
+        
+        return {
+            'success': True,
+            'details': {
+                'generated_message': generated_message,
+                'telnyx_response': telnyx_data,
+                'message_id': telnyx_data.get('data', {}).get('id')
+            }
+        }
+        
+    except requests.exceptions.RequestException as e:
+        error_msg = f"API request failed: {str(e)}"
+        print(f"  ERROR: {error_msg}")
+        state_log.append({"step": "Generate/Send Message", "success": False, "error": error_msg})
+        return {'success': False, 'error': error_msg, 'generated_message': generated_message if 'generated_message' in locals() else 'N/A'}
+    except Exception as e:
+        error_msg = f"Unexpected error: {str(e)}"
+        print(f"  ERROR: {error_msg}")
+        import traceback
+        traceback.print_exc()
+        state_log.append({"step": "Generate/Send Message", "success": False, "error": error_msg})
+        return {'success': False, 'error': error_msg}
+
 
 if __name__ == '__main__':
     app.run(debug=True)
