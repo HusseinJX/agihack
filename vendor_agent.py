@@ -257,6 +257,19 @@ def run_flyout_workflow(p):
     timeline.append({'step': 'book_dining', 'result': dining_resp})
 
 
+    # 5) Book calendar using AGI
+    print("\n[Step 5/5] Using AGI agent to book calendar...")
+    calendar_resp = book_calendar_agi(p, state_log)
+    print(f"Calendar result: {calendar_resp}")
+    timeline.append({'step': 'book_calendar', 'result': calendar_resp})
+
+    return {
+        'success': True,
+        'timeline': timeline,
+        'state_log': state_log,
+    }
+
+
 
 def buy_flight_agi(p, state_log):
     """Book a flight using the AGI agent. Returns a dict with booking results."""
@@ -558,6 +571,59 @@ def book_dining_agi(p, state_log):
             state_log.append({"step": "Cleanup Session (Dining)", **cleanup_state})
     return data
 
+
+# step 5: book calendar using AGI   
+def book_calendar_agi(p, state_log):
+    """Book a calendar using the AGI agent. Returns a dict with booking results."""
+    session_id = None
+    data = {
+        "event_name": "Belle Vue Arrival",
+        "all-day": True,
+        "event_date": "July 19 2024",        
+    }
+    try:
+        # 1. Create AGI session
+        session_id, state = create_agi_session()
+        state_log.append({"step": "Create Session (Calendar)", **state})
+        if not state.get("success"):
+            return {'success': False, 'error': 'Failed to create AGI session'}
+        
+        # 2. Compose booking instructions using flight details
+        message = f"Go to {ENDPOINTS['calendar']} and create a new all-day event with these details: {data}"
+        # 3. Send booking request to AGI
+        _, state = send_agi_message(session_id, message)
+        state_log.append({"step": "Send Calendar Booking Task", **state})
+        if not state.get("success"):
+            return {'success': False, 'error': 'Failed to send task to AGI agent'}
+        
+        # 4. Wait for completion & collect result
+        print("  Waiting for AGI agent to complete calendar booking...")
+        status = wait_for_agi_completion(session_id)
+        state_log.append({"step": "Wait for Calendar Booking", "status": status})
+        data, state = get_agi_results(session_id)
+        state_log.append({"step": "Get Calendar Booking Results", **state})
+        
+        # 5. Parse and return result
+        if not data:
+            return {'success': False, 'error': 'No results from AGI agent'}
+        try:
+            if isinstance(data, str):
+                data = json.loads(data)
+        except Exception as e:
+            print(f"  Error parsing AGI response: {e}")
+            return {'success': False, 'error': f'Failed to parse response: {e}'}
+        if data.get('success'):
+            return {
+                'success': True,
+                'details': data,
+                'confirmation_number': data.get('confirmation_number')
+            }
+        return {'success': False, 'error': data.get('error', 'Booking failed')}
+    finally:
+        if session_id:
+            cleanup_state = cleanup_agi_session(session_id)
+            state_log.append({"step": "Cleanup Session (Calendar)", **cleanup_state})
+    return data
 
 if __name__ == '__main__':
     app.run(debug=True)
