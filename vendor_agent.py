@@ -50,38 +50,11 @@ ENDPOINTS = {
     "calendar": "https://real-gocalendar.vercel.app/calendar/api/events",
 }
 
-# Basic HTML UI using render_template_string to keep everything in one file
-INDEX_HTML = """
-<!doctype html>
-<title>Fly-Out Assistant</title>
-<h2>Fly someone out — quick workflow</h2>
-<form method=post action="/start">
-  <label>From (city or airport code): <input name=from_location required></label><br>
-  <label>To (city or airport code): <input name=to_location required></label><br>
-  <label>Depart date (YYYY-MM-DD): <input name=depart_date required></label><br>
-  <label>Return date (optional YYYY-MM-DD): <input name=return_date></label><br>
-  <label>Eating preference: 
-    <select name=eat_mode>
-      <option value="in">Eat in (order food)</option>
-      <option value="out">Eat out (book restaurant)</option>
-    </select>
-  </label><br>
-  <label>Lodging preference:
-    <select name=lodging>
-      <option value="airbnb">Airbnb</option>
-      <option value="marriott">Marriott</option>
-    </select>
-  </label><br>
-  <label>Number of travelers: <input name=num_travelers type=number min=1 value=1></label><br>
-  <button type=submit>Start Fly-Out Workflow</button>
-</form>
 
-<p>Note: This is a demo. Remote endpoints are example placeholders — adapt to your real APIs.</p>
-"""
 
 @app.route('/')
 def index():
-    return render_template_string(INDEX_HTML)
+    return render_template_string(open('u2i.html').read())
 
 
 @app.route('/start', methods=['POST'])
