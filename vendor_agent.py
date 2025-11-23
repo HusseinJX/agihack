@@ -26,7 +26,7 @@ How to run:
 
 """
 
-from flask import Flask, request, render_template_string, jsonify
+from flask import Flask, request, render_template_string, jsonify, Response
 import os
 import requests
 import datetime
@@ -141,6 +141,74 @@ def start_workflow():
         import traceback
         traceback.print_exc()
         return jsonify({'error': error_msg, 'traceback': traceback.format_exc()}), 500
+
+
+@app.route('/api/session/<session_id>/status', methods=['GET'])
+def get_session_status(session_id):
+    """Proxy endpoint to get AGI session status"""
+    try:
+        resp = requests.get(
+            f"{AGI_BASE_URL}/sessions/{session_id}/status",
+            headers={"Authorization": f"Bearer {AGI_API_KEY}"},
+            timeout=30
+        )
+        resp.raise_for_status()
+        response = jsonify(resp.json())
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response
+    except requests.exceptions.RequestException as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/session/<session_id>/messages', methods=['GET'])
+def get_session_messages(session_id):
+    """Proxy endpoint to get AGI session messages"""
+    try:
+        resp = requests.get(
+            f"{AGI_BASE_URL}/sessions/{session_id}/messages",
+            headers={"Authorization": f"Bearer {AGI_API_KEY}"},
+            timeout=30
+        )
+        resp.raise_for_status()
+        response = jsonify(resp.json())
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response
+    except requests.exceptions.RequestException as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/session/<session_id>/events', methods=['GET'])
+def stream_session_events(session_id):
+    """Stream events from AGI session (SSE)"""
+    def generate():
+        try:
+            # For now, we'll poll and stream. In production, use WebSocket or SSE properly
+            import time
+            last_seen = 0
+            while True:
+                resp = requests.get(
+                    f"{AGI_BASE_URL}/sessions/{session_id}/messages",
+                    headers={"Authorization": f"Bearer {AGI_API_KEY}"},
+                    timeout=30
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                messages = data.get('messages', [])
+                
+                # Send new messages
+                for msg in messages[last_seen:]:
+                    yield f"data: {json.dumps(msg)}\n\n"
+                    last_seen += 1
+                
+                time.sleep(1)
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+    
+    response = Response(generate(), mimetype='text/event-stream')
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Cache-Control', 'no-cache')
+    return response
+
 
 # ------------------------
 # AGI Helper Functions
