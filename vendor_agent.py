@@ -255,7 +255,7 @@ def run_flyout_workflow(p):
     state_log = []
 
     # 1) Buy flight using AGI
-    print("\n[Step 1/6] Using AGI agent to book flight...")
+    print("\n[Step 1/7] Using AGI agent to book flight...")
     sentry_sdk.add_breadcrumb(
         category="workflow",
         message="Starting flight booking step",
@@ -279,7 +279,7 @@ def run_flyout_workflow(p):
 
 
     # 2) Order Uber using AGI (needs flight details for timing)
-    print("\n[Step 2/6] Using AGI agent to order Uber...")
+    print("\n[Step 2/7] Using AGI agent to order Uber...")
     sentry_sdk.add_breadcrumb(
         category="workflow",
         message="Starting Uber ordering step",
@@ -302,7 +302,7 @@ def run_flyout_workflow(p):
 
 
     # 3) Book lodging using AGI
-    print("\n[Step 3/6] Using AGI agent to book lodging...")
+    print("\n[Step 3/7] Using AGI agent to book lodging...")
     sentry_sdk.add_breadcrumb(
         category="workflow",
         message="Starting lodging booking step",
@@ -325,7 +325,7 @@ def run_flyout_workflow(p):
 
 
     # 4) Book dining using AGI
-    print("\n[Step 4/6] Using AGI agent to book dining...")
+    print("\n[Step 4/7] Using AGI agent to book dining...")
     sentry_sdk.add_breadcrumb(
         category="workflow",
         message="Starting dining booking step",
@@ -348,7 +348,7 @@ def run_flyout_workflow(p):
 
 
     # 5) Book calendar using AGI
-    print("\n[Step 5/6] Using AGI agent to book calendar...")
+    print("\n[Step 5/7] Using AGI agent to book calendar...")
     sentry_sdk.add_breadcrumb(
         category="workflow",
         message="Starting calendar booking step",
@@ -368,8 +368,8 @@ def run_flyout_workflow(p):
         sentry_sdk.capture_exception(e)
         raise
 
-    # 6) Generate message with Minimax and send with Telnyx
-    print("\n[Step 6/6] Generating greeting with Minimax and sending with Telnyx...")
+    # 6) Generate message with Minimax and send SMS with Telnyx
+    print("\n[Step 6/7] Generating greeting with Minimax and sending SMS with Telnyx...")
     sentry_sdk.add_breadcrumb(
         category="workflow",
         message="Starting message generation and sending step",
@@ -384,6 +384,27 @@ def run_flyout_workflow(p):
             message="Message generation and sending completed",
             level="info",
             data={"success": message_resp.get('success')}
+        )
+    except Exception as e:
+        sentry_sdk.capture_exception(e)
+        raise
+
+    # 7) Generate confirmation message with Minimax and make voice call with Telnyx
+    print("\n[Step 7/7] Generating confirmation message with Minimax and making voice call with Telnyx...")
+    sentry_sdk.add_breadcrumb(
+        category="workflow",
+        message="Starting voice call step",
+        level="info"
+    )
+    try:
+        voice_resp = generate_and_call_voice_minimax(p, timeline, state_log)
+        print(f"Voice call result: {voice_resp}")
+        timeline.append({'step': 'voice_call', 'result': voice_resp})
+        sentry_sdk.add_breadcrumb(
+            category="workflow",
+            message="Voice call completed",
+            level="info",
+            data={"success": voice_resp.get('success')}
         )
     except Exception as e:
         sentry_sdk.capture_exception(e)
@@ -892,6 +913,201 @@ def generate_and_send_message_minimax(p, state_log):
         import traceback
         traceback.print_exc()
         state_log.append({"step": "Generate/Send Message", "success": False, "error": error_msg})
+        sentry_sdk.capture_exception(e)
+        return {'success': False, 'error': error_msg}
+
+
+# Step 7: Generate confirmation message with Minimax and make voice call with Telnyx
+def generate_and_call_voice_minimax(p, timeline, state_log):
+    """Generate a personalized trip confirmation message using Minimax AI and deliver it via Telnyx Voice call.
+    
+    This creates a warm, personalized voice call to confirm all trip details.
+    
+    Args:
+        p: Workflow payload with traveler info
+        timeline: Completed workflow steps (to summarize trip details)
+        state_log: State log for tracking workflow steps
+    
+    Returns:
+        dict with success status and call details
+    """
+    # Configuration
+    MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY", "")
+    MINIMAX_API_URL = "https://api.minimax.chat/v1/text/chatcompletion_pro"
+    TELNYX_API_KEY = os.getenv("TELNYX_API_KEY", "")
+    TELNYX_VOICE_API_URL = "https://api.telnyx.com/v2/calls"
+    TELNYX_PHONE_NUMBER = os.getenv("TELNYX_PHONE_NUMBER", "")
+    TELNYX_CONNECTION_ID = os.getenv("TELNYX_CONNECTION_ID", "")
+    RECIPIENT_PHONE = os.getenv("RECIPIENT_PHONE", "6287345655")  # Belle Vue's phone
+    
+    try:
+        # Step 1: Generate personalized confirmation message with Minimax
+        print("  Generating personalized confirmation message with Minimax...")
+        sentry_sdk.add_breadcrumb(
+            category="voice",
+            message="Generating confirmation message with Minimax",
+            level="info"
+        )
+        
+        # Build trip summary from timeline
+        trip_summary = []
+        for step in timeline:
+            step_name = step.get('step', '')
+            step_result = step.get('result', {})
+            if step_name == 'buy_flight' and step_result.get('success'):
+                details = step_result.get('details', {})
+                trip_summary.append(f"Flight confirmed: {details.get('flight_number', 'N/A')} on {p.get('depart_date')}")
+            elif step_name == 'order_uber' and step_result.get('success'):
+                trip_summary.append("Uber ride scheduled for airport pickup")
+            elif step_name == 'book_lodging' and step_result.get('success'):
+                details = step_result.get('details', {})
+                trip_summary.append(f"Hotel reservation confirmed at {details.get('property_name', 'your hotel')}")
+            elif step_name == 'book_dining' and step_result.get('success'):
+                trip_summary.append("Dining reservation confirmed")
+        
+        summary_text = ". ".join(trip_summary) if trip_summary else "All bookings confirmed"
+        
+        # Generate message with Minimax
+        if not MINIMAX_API_KEY:
+            print("  Warning: Minimax API key not configured, using fallback message")
+            confirmation_message = (
+                f"Hi Belle! This is an automated call to confirm your trip to San Francisco on July 19th. "
+                f"Your flight is confirmed, your Uber is scheduled, and your hotel reservation is ready. "
+                f"Everything is all set! Have a wonderful trip!"
+            )
+        else:
+            minimax_prompt = (
+                f"Generate a warm, friendly, and concise voice message (30-40 seconds when spoken) "
+                f"to confirm a trip for Belle. Include: {summary_text}. "
+                f"Make it personal, enthusiastic, and clear. Keep it conversational and natural for a phone call. "
+                f"Start with 'Hi Belle!' and end with 'Have a wonderful trip!'"
+            )
+            
+            minimax_payload = {
+                "model": "abab5.5-chat",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": minimax_prompt
+                    }
+                ],
+                "temperature": 0.7,
+                "max_tokens": 200
+            }
+            
+            minimax_headers = {
+                "Authorization": f"Bearer {MINIMAX_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            
+            minimax_resp = requests.post(
+                MINIMAX_API_URL,
+                headers=minimax_headers,
+                json=minimax_payload,
+                timeout=30
+            )
+            minimax_resp.raise_for_status()
+            minimax_data = minimax_resp.json()
+            
+            # Extract the generated message
+            confirmation_message = minimax_data.get('choices', [{}])[0].get('message', {}).get('content', '').strip()
+            
+            if not confirmation_message:
+                print("  Warning: Minimax returned empty message, using fallback")
+                confirmation_message = (
+                    f"Hi Belle! Your trip to San Francisco on July 19th is all confirmed! "
+                    f"Your flight, Uber, and hotel are all set. Have a wonderful trip!"
+                )
+        
+        print(f"  Generated message: {confirmation_message[:100]}...")
+        state_log.append({"step": "Generate Voice Message (Minimax)", "success": True, "message": confirmation_message})
+        sentry_sdk.add_breadcrumb(
+            category="voice",
+            message="Message generated successfully",
+            level="info",
+            data={"message_preview": confirmation_message[:100]}
+        )
+        
+        # Step 2: Make voice call with Telnyx
+        print("  Making voice call with Telnyx...")
+        sentry_sdk.add_breadcrumb(
+            category="voice",
+            message="Initiating Telnyx voice call",
+            level="info"
+        )
+        
+        if not TELNYX_API_KEY or not TELNYX_PHONE_NUMBER:
+            print("  Warning: Telnyx credentials not configured, skipping voice call")
+            return {
+                'success': False,
+                'error': 'Telnyx credentials not configured',
+                'generated_message': confirmation_message
+            }
+        
+        # Create Telnyx voice call
+        # Telnyx Voice API: Create a call with text-to-speech
+        telnyx_payload = {
+            "connection_id": TELNYX_CONNECTION_ID,
+            "to": RECIPIENT_PHONE,
+            "from": TELNYX_PHONE_NUMBER,
+            "commands": [
+                {
+                    "type": "say",
+                    "payload": {
+                        "text": confirmation_message,
+                        "voice": "female",  # or "male"
+                        "language": "en-US"
+                    }
+                }
+            ]
+        }
+        
+        telnyx_headers = {
+            "Authorization": f"Bearer {TELNYX_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        telnyx_resp = requests.post(
+            TELNYX_VOICE_API_URL,
+            headers=telnyx_headers,
+            json=telnyx_payload,
+            timeout=30
+        )
+        telnyx_resp.raise_for_status()
+        telnyx_data = telnyx_resp.json()
+        
+        call_id = telnyx_data.get('data', {}).get('id', 'N/A')
+        print(f"  Voice call initiated successfully: {call_id}")
+        state_log.append({"step": "Make Voice Call (Telnyx)", "success": True, "call_id": call_id})
+        sentry_sdk.add_breadcrumb(
+            category="voice",
+            message="Voice call initiated successfully",
+            level="info",
+            data={"call_id": call_id}
+        )
+        
+        return {
+            'success': True,
+            'details': {
+                'generated_message': confirmation_message,
+                'telnyx_response': telnyx_data,
+                'call_id': call_id,
+                'recipient_phone': RECIPIENT_PHONE
+            }
+        }
+        
+    except requests.exceptions.RequestException as e:
+        error_msg = f"API request failed: {str(e)}"
+        print(f"  ERROR: {error_msg}")
+        state_log.append({"step": "Generate/Call Voice", "success": False, "error": error_msg})
+        sentry_sdk.capture_exception(e)
+        return {'success': False, 'error': error_msg, 'generated_message': confirmation_message if 'confirmation_message' in locals() else 'N/A'}
+    except Exception as e:
+        error_msg = f"Unexpected error: {str(e)}"
+        print(f"  ERROR: {error_msg}")
+        import traceback
+        traceback.print_exc()
+        state_log.append({"step": "Generate/Call Voice", "success": False, "error": error_msg})
         sentry_sdk.capture_exception(e)
         return {'success': False, 'error': error_msg}
 
